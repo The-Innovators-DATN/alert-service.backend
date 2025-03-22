@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: alert
+  datasource:
+    url: jdbc:postgresql://160.191.49.50:5432/alert_dev
+    username: wqSysadmin
+    password: asd123
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+server:
+  port: 3001
