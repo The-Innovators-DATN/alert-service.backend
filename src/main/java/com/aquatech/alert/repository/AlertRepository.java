@@ -22,4 +22,7 @@ public interface AlertRepository extends JpaRepository<Alert, UUID> {
     @Modifying
     @Query("UPDATE Alert a SET a.status = 'deleted', a.updatedAt = CURRENT_TIMESTAMP WHERE a.id = ?1 ")
     void deleteByAlertId(UUID alertId);
+
+    @Query("SELECT a FROM Alert a WHERE a.status != 'deleted'")
+    List<Alert> getAllAlerts();
 }
