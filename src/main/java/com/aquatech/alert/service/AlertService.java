@@ -81,4 +81,8 @@ public class AlertService {
         alert.setUpdatedAt(LocalDateTime.now());
         return alertRepository.save(alert);
     }
+
+    public List<Alert> getAllAlerts() {
+        return alertRepository.getAllAlerts();
+    }
 }
