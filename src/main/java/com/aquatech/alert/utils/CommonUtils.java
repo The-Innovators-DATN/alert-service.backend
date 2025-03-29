@@ -2,7 +2,7 @@ package com.aquatech.alert.utils;
 
 import java.util.Collection;
 
-public class CommonUtil {
+public class CommonUtils {
     public static boolean isEmptyCollection(Collection<?> collection) {
         return collection == null || collection.isEmpty();
     }
