@@ -1,7 +1,7 @@
 package com.aquatech.alert.entity.converter;
 
 import com.aquatech.alert.model.AlertCondition;
-import com.aquatech.alert.utils.CommonUtil;
+import com.aquatech.alert.utils.CommonUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.AttributeConverter;
@@ -16,7 +16,7 @@ public class AlertConditionListConverter implements AttributeConverter<List<Aler
 
     @Override
     public String convertToDatabaseColumn(List<AlertCondition> attribute) {
-        if (CommonUtil.isEmptyCollection(attribute)) {
+        if (CommonUtils.isEmptyCollection(attribute)) {
             return "[]";
         }
         try {
@@ -28,7 +28,7 @@ public class AlertConditionListConverter implements AttributeConverter<List<Aler
 
     @Override
     public List<AlertCondition> convertToEntityAttribute(String dbData) {
-        if (CommonUtil.isEmptyString(dbData)) {
+        if (CommonUtils.isEmptyString(dbData)) {
             return new ArrayList<>();
         }
         try {

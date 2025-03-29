@@ -15,6 +15,9 @@ public class AlertService {
     @Autowired()
     private AlertRepository alertRepository;
 
+    @Autowired()
+    private CacheService cacheService;
+
     public Alert createAlert(Integer userId, AlertDto alertDto) {
         if (userId == null || alertDto == null) {
             throw new IllegalArgumentException("User ID and alert data must be provided");
@@ -35,7 +38,14 @@ public class AlertService {
         alert.setUpdatedAt(LocalDateTime.now());
         alert.setMessage(alertDto.getMessage());
         alert.setConditions(alertDto.getConditions());
-        return alertRepository.save(alert);
+
+        Alert createdAlert = alertRepository.save(alert);
+
+        if (createdAlert.getSilenced() != 1 && createdAlert.getStatus().equals("active")) {
+            cacheService.setCache(createdAlert);
+        }
+
+        return createdAlert;
     }
 
     public List<Alert> getAlertsByUserId(Integer userId) {
@@ -50,6 +60,9 @@ public class AlertService {
         Alert alert = alertRepository.findById(UUID.fromString(alertId))
                 .orElseThrow(() -> new IllegalArgumentException("Alert not found"));
 
+        Integer silenced = alert.getSilenced();
+        String status = alert.getStatus();
+
         alert.setName(alertDto.getName());
         alert.setStationId(alertDto.getStationId());
         alert.setSilenced(alertDto.getSilenced());
@@ -57,16 +70,29 @@ public class AlertService {
         alert.setUpdatedAt(LocalDateTime.now());
         alert.setMessage(alertDto.getMessage());
         alert.setConditions(alertDto.getConditions());
-        return alertRepository.save(alert);
+
+        Alert updatedAlert = alertRepository.save(alert);
+
+        if (updatedAlert.getSilenced() != 1 && updatedAlert.getStatus().equals("active")) {
+            cacheService.setCache(updatedAlert);
+        } else {
+            if (updatedAlert.getSilenced() == 1 && silenced == 0
+                || !updatedAlert.getStatus().equals("active") && status.equals("active")) {
+                cacheService.removeCache(updatedAlert);
+            }
+        }
+
+        return updatedAlert;
     }
 
     public void deleteAlert(String alertId) {
         if (alertId == null) {
             throw new IllegalArgumentException("Alert ID must be provided");
         }
-        alertRepository.findById(UUID.fromString(alertId))
+        Alert deletedAlert = alertRepository.findById(UUID.fromString(alertId))
                 .orElseThrow(() -> new IllegalArgumentException("Alert not found"));
         alertRepository.deleteByAlertId(UUID.fromString(alertId));
+        cacheService.removeCache(deletedAlert);
     }
 
     public Alert updateAlertStatus(String alertId, String status) {
@@ -77,12 +103,25 @@ public class AlertService {
         Alert alert = alertRepository.findById(UUID.fromString(alertId))
                 .orElseThrow(() -> new IllegalArgumentException("Alert not found"));
 
+        String statusAlert = alert.getStatus();
+
         alert.setStatus(status);
         alert.setUpdatedAt(LocalDateTime.now());
+
+        Alert updatedAlert = alertRepository.save(alert);
+
+        if (updatedAlert.getSilenced() != 1 && status.equals("active")) {
+            cacheService.setCache(updatedAlert);
+        } else {
+            if (updatedAlert.getSilenced() != 1 && statusAlert.equals("active")) {
+                cacheService.removeCache(updatedAlert);
+            }
+        }
+
         return alertRepository.save(alert);
     }
 
-    public List<Alert> getAllAlerts() {
-        return alertRepository.getAllAlerts();
+    public List<Alert> getAllActiveAlerts() {
+        return alertRepository.getAllActiveAlerts();
     }
 }
