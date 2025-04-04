@@ -2,7 +2,9 @@ package com.aquatech.alert.service;
 
 import com.aquatech.alert.dto.AlertDto;
 import com.aquatech.alert.entity.Alert;
+import com.aquatech.alert.model.AlertCondition;
 import com.aquatech.alert.repository.AlertRepository;
+import com.aquatech.alert.utils.CommonUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -37,8 +39,11 @@ public class AlertService {
         alert.setCreatedAt(LocalDateTime.now());
         alert.setUpdatedAt(LocalDateTime.now());
         alert.setMessage(alertDto.getMessage());
-        alert.setConditions(alertDto.getConditions());
-
+        if (!CommonUtils.isEmptyCollection(alertDto.getConditions())) {
+            alert.setConditions(addUidToConditions(alertDto.getConditions()));
+        } else {
+            alert.setConditions(null);
+        }
         Alert createdAlert = alertRepository.save(alert);
 
         if (createdAlert.getSilenced() != 1 && createdAlert.getStatus().equals("active")) {
@@ -67,10 +72,15 @@ public class AlertService {
         alert.setStationId(alertDto.getStationId());
         alert.setSilenced(alertDto.getSilenced());
         alert.setStatus(alertDto.getStatus());
-        alert.setUpdatedAt(LocalDateTime.now());
-        alert.setMessage(alertDto.getMessage());
-        alert.setConditions(alertDto.getConditions());
 
+        alert.setMessage(alertDto.getMessage());
+
+        if (!CommonUtils.isEmptyCollection(alertDto.getConditions())) {
+            alert.setConditions(addUidToConditions(alertDto.getConditions()));
+        } else {
+            alert.setConditions(null);
+        }
+        alert.setUpdatedAt(LocalDateTime.now());
         Alert updatedAlert = alertRepository.save(alert);
 
         if (updatedAlert.getSilenced() != 1 && updatedAlert.getStatus().equals("active")) {
@@ -123,5 +133,15 @@ public class AlertService {
 
     public List<Alert> getAllActiveAlerts() {
         return alertRepository.getAllActiveAlerts();
+    }
+
+    private List<AlertCondition> addUidToConditions(List<AlertCondition> conditions) {
+        for (AlertCondition condition : conditions) {
+            if (condition.getUid() == null) {
+                condition.setUid(UUID.randomUUID());
+            }
+        }
+
+        return conditions;
     }
 }

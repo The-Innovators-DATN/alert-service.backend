@@ -1,18 +1,21 @@
 package com.aquatech.alert.service;
 
 import com.aquatech.alert.entity.Alert;
+import com.aquatech.alert.model.AlertCondition;
 import com.aquatech.alert.utils.CacheUtils;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @Slf4j
@@ -33,7 +36,7 @@ public class SyncService {
         }
     }
 
-    @Scheduled(fixedRate = 5000)
+    @Scheduled(fixedRate = 60*60*1000) // 1 hour
     @Async("syncExecutor")
     public void scheduledSync() {
         try {
@@ -53,38 +56,50 @@ public class SyncService {
         }
 
         try {
-            Map<String, Set<String>> stationToAlertIdsMap = updateActiveAlerts(alerts);
-            cleanupInactiveAlerts(stationToAlertIdsMap.keySet(), stationToAlertIdsMap);
+            Set<String> activeKeys = updateActiveAlerts(alerts);
+
+            cleanupInactiveAlerts(activeKeys);
         } catch (Exception e) {
             log.error("Error in sync process", e);
         }
     }
 
-    private Map<String, Set<String>> updateActiveAlerts(List<Alert> alerts) throws JsonProcessingException {
-        Map<String, Set<String>> stationToAlertIdsMap = new HashMap<>();
-
-        // Pre-process alerts to prepare data
+    private Set<String> updateActiveAlerts(List<Alert> alerts) {
+        Set<String> activeKeys = new HashSet<>();
         List<Map<String, Object>> batchOperations = new ArrayList<>();
 
         for (Alert alert : alerts) {
-            Integer stationId = alert.getStationId();
-            String alertId = alert.getId().toString();
-            String stationKey = CacheUtils.buildStationKey(stationId);
-            String alertKey = CacheUtils.buildAlertKey(stationId, alertId);
-            String alertJson = objectMapper.writeValueAsString(alert);
+            if (alert.getStationId() == null || alert.getUid() == null || alert.getConditions() == null) {
+                log.warn("Skipping alert with null stationId, id, or conditions: {}", alert.getUid());
+                continue;
+            }
 
-            // Add to operations list
-            Map<String, Object> operation = new HashMap<>();
-            operation.put("alertKey", alertKey);
-            operation.put("alertJson", alertJson);
-            operation.put("stationKey", stationKey);
-            operation.put("alertId", alertId);
-            batchOperations.add(operation);
+            try {
+                for (AlertCondition condition : alert.getConditions()) {
+                    if (condition.getUid() == null) {
+                        log.warn("Skipping condition with null UID for alert: {}", alert.getUid());
+                        continue;
+                    }
 
-            // Track active alerts
-            stationToAlertIdsMap
-                    .computeIfAbsent(stationKey, k -> new HashSet<>())
-                    .add(alertId);
+                    String cacheKey = CacheUtils.buildCacheKey(
+                            alert.getStationId(),
+                            alert.getUid().toString(),
+                            condition.getMetricId(),
+                            condition.getUid().toString()
+                    );
+
+                    Map<String, Object> valueKey = getValueKey(alert, condition);
+
+                    Map<String, Object> operation = new HashMap<>();
+                    operation.put("key", cacheKey);
+                    operation.put("value", objectMapper.writeValueAsString(valueKey));
+                    batchOperations.add(operation);
+
+                    activeKeys.add(cacheKey);
+                }
+            } catch (Exception e) {
+                log.error("Error processing alert {}: {}", alert.getUid(), e.getMessage());
+            }
         }
 
         // Use a loop for batch processing (100 items per batch)
@@ -96,70 +111,81 @@ public class SyncService {
             processBatch(batch);
         }
 
-        return stationToAlertIdsMap;
+        return activeKeys;
+    }
+
+    private static Map<String, Object> getValueKey(Alert alert, AlertCondition condition) {
+        Map<String, Object> valueMap = new HashMap<>();
+        valueMap.put("user_id", alert.getUserId());
+        valueMap.put("alert_id", alert.getUid());
+        valueMap.put("alert_name", alert.getName());
+        valueMap.put("severity", condition.getSeverity());
+        valueMap.put("condition_uid", condition.getUid());
+        valueMap.put("operator", condition.getOperator());
+        valueMap.put("threshold", condition.getThreshold());
+        valueMap.put("threshold_min", condition.getThresholdMin());
+        valueMap.put("threshold_max", condition.getThresholdMax());
+        valueMap.put("message", alert.getMessage());
+        return valueMap;
     }
 
     private void processBatch(List<Map<String, Object>> batch) {
-        // Process alerts in batches
         batch.forEach(op -> {
-            redisTemplate.opsForValue().set((String) op.get("alertKey"), op.get("alertJson"));
-            redisTemplate.opsForSet().add((String) op.get("stationKey"), op.get("alertId"));
+            try {
+                String key = (String) op.get("key");
+                Object value = op.get("value");
+
+                // Set value with expiration
+                redisTemplate.opsForValue().set(key, value);
+
+                log.debug("Saved key: {}", key);
+            } catch (Exception e) {
+                log.error("Error processing batch item: {}", e.getMessage());
+            }
         });
     }
 
-    private void cleanupInactiveAlerts(Set<String> stationKeys, Map<String, Set<String>> stationToAlertIdsMap) {
-        Map<String, List<Object>> removalMap = new HashMap<>();
-        List<String> keysToDelete = new ArrayList<>();
+    private void cleanupInactiveAlerts(Set<String> activeKeys) {
+        try {
+            // Get all keys matching the pattern
+            Set<String> allKeys = scanKeys(CacheUtils.getCacheKeyPattern());
 
-        // Process one station at a time to avoid memory issues with large datasets
-        for (String stationKey : stationKeys) {
-            Set<Object> currentAlertIds = redisTemplate.opsForSet().members(stationKey);
-            if (currentAlertIds == null || currentAlertIds.isEmpty()) {
-                continue;
-            }
+            // Find keys to delete (keys in Redis but not in active list)
+            Set<String> keysToDelete = allKeys.stream()
+                    .filter(key -> !activeKeys.contains(key))
+                    .collect(Collectors.toSet());
 
-            Set<String> activeAlertIds = stationToAlertIdsMap.getOrDefault(stationKey, Collections.emptySet());
-            List<Object> itemsToRemove = new ArrayList<>();
+            if (!keysToDelete.isEmpty()) {
+                // Delete in batches of 100
+                List<String> keysList = new ArrayList<>(keysToDelete);
+                int batchSize = 100;
 
-            // Find inactive alerts
-            for (Object alertIdObj : currentAlertIds) {
-                String alertId = alertIdObj.toString();
-                if (!activeAlertIds.contains(alertId)) {
-                    keysToDelete.add(String.format("%s:%s", stationKey, alertId));
-                    itemsToRemove.add(alertId);
+                for (int i = 0; i < keysList.size(); i += batchSize) {
+                    int endIndex = Math.min(i + batchSize, keysList.size());
+                    List<String> batch = keysList.subList(i, endIndex);
+                    redisTemplate.delete(batch);
                 }
+
+                log.info("Cleaned up {} inactive alert keys", keysToDelete.size());
+            } else {
+                log.info("No inactive keys to clean up");
             }
-
-            if (!itemsToRemove.isEmpty()) {
-                removalMap.put(stationKey, itemsToRemove);
-            }
-        }
-
-        // Perform batch operations
-        performBatchRemovals(removalMap, keysToDelete);
-    }
-
-    private void performBatchRemovals(Map<String, List<Object>> removalMap, List<String> keysToDelete) {
-        // Remove members from sets
-        removalMap.forEach((stationKey, itemsToRemove) -> {
-            if (!itemsToRemove.isEmpty()) {
-                redisTemplate.opsForSet().remove(stationKey, itemsToRemove.toArray());
-                log.debug("Removed {} alerts from station set {}", itemsToRemove.size(), stationKey);
-            }
-        });
-
-        // Delete keys in batches of 100
-        if (!keysToDelete.isEmpty()) {
-            int batchSize = 100;
-            for (int i = 0; i < keysToDelete.size(); i += batchSize) {
-                int endIndex = Math.min(i + batchSize, keysToDelete.size());
-                List<String> batch = keysToDelete.subList(i, endIndex);
-                redisTemplate.delete(batch);
-            }
-
-            log.debug("Bulk deleted {} inactive alert keys", keysToDelete.size());
+        } catch (Exception e) {
+            log.error("Error during cleanup process: {}", e.getMessage());
         }
     }
 
+    private Set<String> scanKeys(String pattern) {
+        Set<String> keys = new HashSet<>();
 
+        try (Cursor<String> cursor = redisTemplate.scan(ScanOptions.scanOptions().match(pattern).build())) {
+            while (cursor.hasNext()) {
+                keys.add(cursor.next());
+            }
+        } catch (Exception e) {
+            log.error("Error scanning Redis keys: {}", e.getMessage());
+        }
+
+        return keys;
+    }
 }

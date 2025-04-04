@@ -7,11 +7,15 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.util.UUID;
+
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 public class AlertCondition {
+    private UUID uid;
+
     @JsonProperty("metric_id")
     private Integer metricId;
 
