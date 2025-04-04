@@ -29,7 +29,7 @@ public class Alert {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "uid", updatable = false, nullable = false)
-    private UUID id;
+    private UUID uid;
 
     @Column(name = "name", nullable = false, length = 255)
     private String name;
