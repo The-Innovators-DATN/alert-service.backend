@@ -1,14 +1,24 @@
 package com.aquatech.alert.utils;
 
+import com.aquatech.alert.constant.RedisConstant;
+import com.aquatech.alert.entity.Alert;
+import com.aquatech.alert.model.AlertCondition;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * Utility class for Redis cache key management.
  * Provides methods to build standardized cache keys for the alert system.
  */
 public class CacheUtils {
-    private static final String STATION_PREFIX = "station:";
-    private static final String ALERT_SUFFIX = ":alert";
-    private static final String METRIC_SUFFIX = ":metric";
-    private static final String CONDITION_SUFFIX = ":condition";
+    private static final String STATION = "station";
+    private static final String ALERT = "alert";
+    private static final String METRIC = "metric";
+    private static final String CONDITION = "condition";
 
     /**
      * Builds a cache key for storing alert condition data.
@@ -21,58 +31,32 @@ public class CacheUtils {
      * @return A formatted cache key
      */
     public static String buildCacheKey(
-            Integer stationId,
+            String stationId,
             String alertId,
-            Integer metricId,
+            String metricId,
             String conditionId
     ) {
-        return STATION_PREFIX + stationId + ALERT_SUFFIX + ":" + alertId +
-                METRIC_SUFFIX + ":" + metricId + CONDITION_SUFFIX + ":" + conditionId;
+        return STATION + ":" + stationId + ":" +
+                ALERT + ":" + alertId + ":" +
+                METRIC + ":" + metricId + ":" +
+                CONDITION + ":" + conditionId;
     }
 
-    /**
-     * Gets the key pattern for scanning operations.
-     *
-     * @return Pattern string for Redis scan operations
-     */
-    public static String getCacheKeyPattern() {
-        return STATION_PREFIX + "*" + ALERT_SUFFIX + ":*" +
-                METRIC_SUFFIX + ":*" + CONDITION_SUFFIX + ":*";
+    public static Map<String, Object> getValueKey(Alert alert, AlertCondition condition) {
+        Map<String, Object> valueMap = new HashMap<>();
+        valueMap.put(RedisConstant.KEY_ALERT_ID, alert.getUid());
+        valueMap.put(RedisConstant.KEY_ALERT_NAME, alert.getName());
+        valueMap.put(RedisConstant.KEY_USER_ID, alert.getUserId());
+        valueMap.put(RedisConstant.KEY_MESSAGE, alert.getMessage());
+
+        valueMap.put(RedisConstant.KEY_CONDITION_UID, condition.getUid());
+        valueMap.put(RedisConstant.KEY_SEVERITY, condition.getSeverity());
+        valueMap.put(RedisConstant.KEY_OPERATOR, condition.getOperator());
+        valueMap.put(RedisConstant.KEY_THRESHOLD, condition.getThreshold());
+        valueMap.put(RedisConstant.KEY_THRESHOLD_MIN, condition.getThresholdMin());
+        valueMap.put(RedisConstant.KEY_THRESHOLD_MAX, condition.getThresholdMax());
+
+        return valueMap;
     }
 
-    /**
-     * Gets the station prefix for key construction.
-     *
-     * @return The station prefix string
-     */
-    public static String getStationPrefix() {
-        return STATION_PREFIX;
-    }
-
-    /**
-     * Gets the alert suffix for key construction.
-     *
-     * @return The alert suffix string
-     */
-    public static String getAlertSuffix() {
-        return ALERT_SUFFIX;
-    }
-
-    /**
-     * Gets the metric suffix for key construction.
-     *
-     * @return The metric suffix string
-     */
-    public static String getMetricSuffix() {
-        return METRIC_SUFFIX;
-    }
-
-    /**
-     * Gets the condition suffix for key construction.
-     *
-     * @return The condition suffix string
-     */
-    public static String getConditionSuffix() {
-        return CONDITION_SUFFIX;
-    }
 }

@@ -23,6 +23,6 @@ public interface AlertRepository extends JpaRepository<Alert, UUID> {
 
     @Transactional
     @Modifying
-    @Query("UPDATE Alert a SET a.status = 'deleted', a.updatedAt = CURRENT_TIMESTAMP WHERE a.id = ?1 ")
+    @Query("UPDATE Alert a SET a.status = 'deleted', a.updatedAt = CURRENT_TIMESTAMP WHERE a.uid = ?1 ")
     void deleteByAlertId(UUID alertId);
 }

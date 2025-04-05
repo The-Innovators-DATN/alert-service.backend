@@ -1,8 +1,12 @@
 package com.aquatech.alert.service;
 
+import com.aquatech.alert.constant.AlertConstant;
+import com.aquatech.alert.constant.OperatorConstant;
+import com.aquatech.alert.constant.RedisConstant;
 import com.aquatech.alert.model.AlertNotification;
 import com.aquatech.alert.model.SensorData;
 import com.aquatech.alert.utils.CacheUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,10 +72,12 @@ public class KafkaService {
 
 
     private void processSensorData(SensorData sensorData) {
-        String keyPattern = CacheUtils.getStationPrefix() + sensorData.getStationId() +
-                CacheUtils.getAlertSuffix() + ":*" +
-                CacheUtils.getMetricSuffix() + ":" + sensorData.getSensorId() +
-                CacheUtils.getConditionSuffix() + ":*";
+        String keyPattern = CacheUtils.buildCacheKey(
+                sensorData.getStationId().toString(),
+                "*",
+                sensorData.getSensorId().toString(),
+                "*"
+        );
 
         Set<String> matchingKeys = redisTemplate.keys(keyPattern);
 
@@ -88,38 +94,39 @@ public class KafkaService {
                     continue;
                 }
 
-                Map<String, Object> conditionData = objectMapper.readValue(jsonValue, Map.class);
+                Map<String, Object> conditionData = objectMapper.readValue(jsonValue, new TypeReference<Map<String, Object>>() {});
 
-                Integer userId = (Integer) conditionData.get("user_id");
-                String operator = (String) conditionData.get("operator");
-                Integer severity = (Integer) conditionData.get("severity");
-                Double threshold = parseDoubleValue(conditionData.get("threshold"));
-                Double thresholdMin = parseDoubleValue(conditionData.get("threshold_min"));
-                Double thresholdMax = parseDoubleValue(conditionData.get("threshold_max"));
-                String message = (String) conditionData.get("message");
-                String alertName = (String) conditionData.get("alert_name");
-                String alertId = (String) conditionData.get("alert_id");
-                String conditionUid = (String) conditionData.get("condition_uid");
+                String alertId = (String) conditionData.get(RedisConstant.KEY_ALERT_ID);
+                String alertName = (String) conditionData.get(RedisConstant.KEY_ALERT_NAME);
+                Integer userId = (Integer) conditionData.get(RedisConstant.KEY_USER_ID);
+                String message = (String) conditionData.get(RedisConstant.KEY_MESSAGE);
+                String conditionUid = (String) conditionData.get(RedisConstant.KEY_CONDITION_UID);
+                Integer severity = (Integer) conditionData.get(RedisConstant.KEY_SEVERITY);
+                String operator = (String) conditionData.get(RedisConstant.KEY_OPERATOR);
+                Double threshold = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD));
+                Double thresholdMin = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD_MIN));
+                Double thresholdMax = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD_MAX));
+
                 Double currentValue = sensorData.getValue();
 
                 boolean conditionMet = evaluateCondition(
                         operator, currentValue, threshold, thresholdMin, thresholdMax
                 );
 
-                Set<String> trackingKeyCondition = redisTemplate.keys("Tracking:" + conditionUid);
+                Set<String> trackingKeyCondition = redisTemplate.keys(RedisConstant.TRACKING_PREFIX + conditionUid);
 
                 if (conditionMet && trackingKeyCondition.isEmpty()) {
                     log.info("Alert condition met for key: {}", key);
                     triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                            threshold, thresholdMin, thresholdMax, currentValue, "alert");
-                    redisTemplate.opsForValue().set("Tracking:" + conditionUid, "true", Duration.ofHours(1));
+                            threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.STATUS_ALERT);
+                    redisTemplate.opsForValue().set(RedisConstant.TRACKING_PREFIX + conditionUid, "true", Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
                 } else if (!conditionMet && !trackingKeyCondition.isEmpty()) {
                     log.info("Alert condition resolved {}", key);
                     message = "Alert condition resolved for " + sensorData.getMetric() +
                             " with value: " + currentValue;
                     triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                            threshold, thresholdMin, thresholdMax, currentValue, "resolved");
-                    redisTemplate.delete("Tracking:" + conditionUid);
+                            threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.STATUS_RESOLVED);
+                    redisTemplate.delete(RedisConstant.TRACKING_PREFIX + conditionUid);
                 }
             } catch (Exception e) {
                 log.error("Error processing key {}: {}", key, e.getMessage(), e);
@@ -161,17 +168,40 @@ public class KafkaService {
             log.warn("Current value or operator is null");
             return false;
         }
+
         return switch (operator.toUpperCase()) {
-            case "EQ" -> threshold != null && Math.abs(currentValue - threshold) < 0.001;
-            case "NEQ" -> threshold != null && Math.abs(currentValue - threshold) >= 0.001;
-            case "GT" -> threshold != null && currentValue > threshold;
-            case "GTE" -> threshold != null && currentValue >= threshold;
-            case "LT" -> threshold != null && currentValue < threshold;
-            case "LTE" -> threshold != null && currentValue <= threshold;
-            case "RANGE" -> thresholdMin != null && thresholdMax != null &&
-                    currentValue >= thresholdMin && currentValue <= thresholdMax;
-            case "OUTSIDE_RANGE" -> thresholdMin != null && thresholdMax != null &&
-                    (currentValue < thresholdMin || currentValue > thresholdMax);
+            case OperatorConstant.EQUAL ->
+                    threshold != null &&
+                            Math.abs(currentValue - threshold) < OperatorConstant.THRESHOLD_PRECISION;
+
+            case OperatorConstant.NOT_EQUAL ->
+                    threshold != null &&
+                            Math.abs(currentValue - threshold) >= OperatorConstant.THRESHOLD_PRECISION;
+
+            case OperatorConstant.GREATER_THAN ->
+                    threshold != null &&
+                            currentValue > threshold;
+
+            case OperatorConstant.GREATER_THAN_EQUAL ->
+                    threshold != null &&
+                            currentValue >= threshold;
+
+            case OperatorConstant.LESS_THAN ->
+                    threshold != null &&
+                            currentValue < threshold;
+
+            case OperatorConstant.LESS_THAN_EQUAL ->
+                    threshold != null &&
+                            currentValue <= threshold;
+
+            case OperatorConstant.RANGE ->
+                    thresholdMin != null && thresholdMax != null &&
+                            currentValue >= thresholdMin && currentValue <= thresholdMax;
+
+            case OperatorConstant.OUTSIDE_RANGE ->
+                    thresholdMin != null && thresholdMax != null &&
+                            (currentValue < thresholdMin || currentValue > thresholdMax);
+
             default -> {
                 log.warn("Unknown operator: {}", operator);
                 yield false;
