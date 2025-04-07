@@ -16,7 +16,7 @@ spring:
     open-in-view: false
   data:
     redis:
-      host: localhost
+      host: redis
       port: 6379
       password: 1234
   kafka:
@@ -26,6 +26,8 @@ spring:
       auto-offset-reset: latest
 server:
   port: 3001
+  servlet:
+    context-path: /api/v0
 kafka:
     alert-topic: sensor_data
     message-topic: alert_notification
