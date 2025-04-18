@@ -94,7 +94,8 @@ public class KafkaService {
                     continue;
                 }
 
-                Map<String, Object> conditionData = objectMapper.readValue(jsonValue, new TypeReference<Map<String, Object>>() {});
+                Map<String, Object> conditionData = objectMapper.readValue(jsonValue, new TypeReference<>() {
+                });
 
                 String alertId = (String) conditionData.get(RedisConstant.KEY_ALERT_ID);
                 String alertName = (String) conditionData.get(RedisConstant.KEY_ALERT_NAME);
@@ -103,6 +104,7 @@ public class KafkaService {
                 String conditionUid = (String) conditionData.get(RedisConstant.KEY_CONDITION_UID);
                 Integer severity = (Integer) conditionData.get(RedisConstant.KEY_SEVERITY);
                 String operator = (String) conditionData.get(RedisConstant.KEY_OPERATOR);
+                String policyId = (String) conditionData.get(RedisConstant.KEY_POLICY_ID);
                 Double threshold = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD));
                 Double thresholdMin = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD_MIN));
                 Double thresholdMax = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD_MAX));
@@ -117,14 +119,14 @@ public class KafkaService {
 
                 if (conditionMet && trackingKeyCondition.isEmpty()) {
                     log.info("Alert condition met for key: {}", key);
-                    triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
+                    triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator, policyId,
                             threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.STATUS_ALERT);
                     redisTemplate.opsForValue().set(RedisConstant.TRACKING_PREFIX + conditionUid, "true", Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
                 } else if (!conditionMet && !trackingKeyCondition.isEmpty()) {
                     log.info("Alert condition resolved {}", key);
                     message = "Alert condition resolved for " + sensorData.getMetric() +
                             " with value: " + currentValue;
-                    triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
+                    triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator, policyId,
                             threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.STATUS_RESOLVED);
                     redisTemplate.delete(RedisConstant.TRACKING_PREFIX + conditionUid);
                 }
@@ -219,6 +221,7 @@ public class KafkaService {
             String message,
             String alertName,
             String alertId,
+            String policyId,
             String operator,
             Double threshold,
             Double thresholdMin,
@@ -244,6 +247,7 @@ public class KafkaService {
         notification.setTriggeredThresholdMax(thresholdMax);
         notification.setTriggeredValue(currentValue);
         notification.setStatus(status);
+        notification.setPolicyId(UUID.fromString(policyId));
 
         // Send the notification
         sendAlertNotification(notification);

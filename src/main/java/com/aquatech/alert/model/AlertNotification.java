@@ -60,4 +60,7 @@ public class AlertNotification {
 
     @JsonProperty("value")
     private Double triggeredValue;
+
+    @JsonProperty("policy_id")
+    private UUID policyId;
 }

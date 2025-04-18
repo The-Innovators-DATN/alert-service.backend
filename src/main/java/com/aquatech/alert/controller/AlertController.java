@@ -18,7 +18,6 @@ public class AlertController {
             @PathVariable Integer userId,
             @RequestBody AlertDto alertDto
     ) {
-        System.out.println(alertDto.getConditions());
         return ResponseEntity.ok().body(new SuccessApiResponse<>(alertService.createAlert(userId, alertDto)));
     }
 
