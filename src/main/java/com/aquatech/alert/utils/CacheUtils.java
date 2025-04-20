@@ -48,7 +48,6 @@ public class CacheUtils {
         valueMap.put(RedisConstant.KEY_ALERT_NAME, alert.getName());
         valueMap.put(RedisConstant.KEY_USER_ID, alert.getUserId());
         valueMap.put(RedisConstant.KEY_MESSAGE, alert.getMessage());
-        valueMap.put(RedisConstant.KEY_POLICY_ID, condition.getPolicyId());
 
         valueMap.put(RedisConstant.KEY_CONDITION_UID, condition.getUid());
         valueMap.put(RedisConstant.KEY_SEVERITY, condition.getSeverity());

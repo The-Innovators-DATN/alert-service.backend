@@ -14,5 +14,4 @@ public class RedisConstant {
     public static final String KEY_ALERT_NAME = "alert_name";
     public static final String KEY_ALERT_ID = "alert_id";
     public static final String KEY_CONDITION_UID = "condition_uid";
-    public static final String KEY_POLICY_ID = "policy_id";
 }

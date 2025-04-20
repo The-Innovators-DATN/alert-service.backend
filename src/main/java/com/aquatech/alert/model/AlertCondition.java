@@ -34,6 +34,4 @@ public class AlertCondition {
 
     private Integer severity;
 
-    @JsonProperty("policy_id")
-    private UUID policyId;
 }
