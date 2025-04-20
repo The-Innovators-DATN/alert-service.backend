@@ -36,8 +36,8 @@ public class AlertNotification {
     @JsonProperty("timestamp")
     private LocalDateTime timestamp;
 
-    @JsonProperty("status")
-    private String status;
+    @JsonProperty("type_message")
+    private String typeMessage;
 
     // Trigger Condition
     @JsonProperty("metric_id")
