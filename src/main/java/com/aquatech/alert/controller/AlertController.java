@@ -8,7 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/alert")
+@RequestMapping("/")
 public class AlertController {
     @Autowired
     private AlertService alertService;

@@ -3,19 +3,19 @@ services:
     build: .
     ports:
       - "3001:3001"
-    depends_on:
-      - redis
-    networks:
-      - aquatech-network
+    # depends_on:
+    #   - redis
+    # networks:
+    #   - aquatech-network
 
-  redis:
-    image: redis:latest
-    command: ["redis-server", "--requirepass", "1234"]
-    ports:
-      - "6379:6379"
-    networks:
-      - aquatech-network
+  # redis:
+  #   image: redis:latest
+  #   command: ["redis-server", "--requirepass", "1234"]
+  #   ports:
+  #     - "6379:6379"
+  #   networks:
+  #     - aquatech-network
 
-networks:
-  aquatech-network:
-    driver: bridge
+# networks:
+#   aquatech-network:
+#     driver: bridge

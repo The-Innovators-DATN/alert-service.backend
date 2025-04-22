@@ -16,11 +16,12 @@ spring:
     open-in-view: false
   data:
     redis:
-      host: redis
+      host: 160.191.49.65
       port: 6379
-      password: 1234
+      password: redis_pwd
+      db: 1
   kafka:
-    bootstrap-servers: 160.191.49.50:9092
+    bootstrap-servers: 103.172.79.28:9092
     consumer:
       group-id: clickhuse-consumer
       auto-offset-reset: latest
@@ -29,5 +30,5 @@ server:
   servlet:
     context-path: /api/v0
 kafka:
-    alert-topic: sensor_data
+    alert-topic: sensor_metric
     message-topic: alert_notification
