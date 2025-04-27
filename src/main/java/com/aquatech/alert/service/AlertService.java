@@ -1,5 +1,6 @@
 package com.aquatech.alert.service;
 
+import com.aquatech.alert.constant.OperatorConstant;
 import com.aquatech.alert.dto.AlertDto;
 import com.aquatech.alert.entity.Alert;
 import com.aquatech.alert.model.AlertCondition;
@@ -8,7 +9,10 @@ import com.aquatech.alert.utils.CommonUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -141,7 +145,30 @@ public class AlertService {
                 condition.setUid(UUID.randomUUID());
             }
         }
-
         return conditions;
+    }
+
+    public Alert getAlertById(String alertId) {
+        if (alertId == null) {
+            throw new IllegalArgumentException("Alert ID must be provided");
+        }
+        return alertRepository.findById(UUID.fromString(alertId))
+                .orElseThrow(() -> new IllegalArgumentException("Alert not found"));
+    }
+
+    public List<String> getOperator() {
+        List<String> operators = new ArrayList<>();
+        Field[] fields = OperatorConstant.class.getDeclaredFields();
+
+        for (Field field : fields) {
+            if (Modifier.isStatic(field.getModifiers()) && field.getType().equals(String.class)) {
+                try {
+                    operators.add((String) field.get(null));
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException("Failed to access field value", e);
+                }
+            }
+        }
+        return operators;
     }
 }

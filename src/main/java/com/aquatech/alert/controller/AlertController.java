@@ -51,4 +51,16 @@ public class AlertController {
     ) {
         return ResponseEntity.ok().body(new SuccessApiResponse<>(alertService.updateAlertStatus(alertId, status)));
     }
+
+    @GetMapping("get/{alertId}")
+    public ResponseEntity<?> getAlertById(
+            @PathVariable String alertId
+    ) {
+        return ResponseEntity.ok().body(new SuccessApiResponse<>(alertService.getAlertById(alertId)));
+    }
+
+    @GetMapping("get/operator")
+    public ResponseEntity<?> getOperator() {
+        return ResponseEntity.ok().body(new SuccessApiResponse<>(alertService.getOperator()));
+    }
 }
