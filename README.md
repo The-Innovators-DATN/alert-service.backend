@@ -1,223 +1,661 @@
 # AquaTech Alert System
 
-This is an alert system for monitoring data from water quality stations. The system receives real-time sensor data, analyzes metrics, and sends notifications when values exceed permitted thresholds.
+A real-time water quality monitoring tool that processes sensor data and sends notifications when values exceed
+predefined thresholds.
 
-## System Overview
+## Table of Contents
 
-The system consists of these main components:
+- [Overview](#overview)
+- [System Components](#system-components)
+- [Workflow](#workflow)
+- [Supported Condition Types](#supported-condition-types)
+- [System Setup](#system-setup)
+    - [Requirements](#requirements)
+    - [Database Setup](#database-setup)
+    - [Configuration](#configuration)
+- [Deployment on Ubuntu (Production)](#deployment-on-ubuntu-production)
+- [API Documentation](#api-documentation)
+    - [Response Format](#response-format)
+    - [HTTP Status Codes](#http-status-codes)
+    - [Endpoints](#endpoints)
+- [Data Models](#data-models)
+- [Redis Structure](#redis-structure)
+- [Source Code Structure](#source-code-structure)
+- [Development Tips](#development-tips)
+- [Future Improvements](#future-improvements)
 
-- **REST API**: Allows alert management
-- **Kafka Consumer**: Receives real-time sensor data
-- **Redis Cache**: Stores alert conditions for fast processing
-- **Kafka Producer**: Sends alert notifications
-- **PostgreSQL**: Stores alert configurations
+## Overview
 
-## System Workflow
+The AquaTech Alert System is designed for water quality stations to monitor sensor data such as temperature and pH. It
+can notify users when values exceed predefined thresholds (e.g., temperature exceeds 30°C or pH drops below 6). The
+system leverages REST API, Kafka, Redis, and PostgreSQL for efficient operation.
 
-### 1. Alert Creation and Management
+## System Components
 
-1. Users create alerts through the REST API
-2. Each alert can contain multiple conditions
-3. Example: Alert when temperature > 30°C OR pH < 6
-4. The system saves alerts to both PostgreSQL and Redis
+| Component      | Description                             |
+|----------------|-----------------------------------------|
+| REST API       | Manages alerts via HTTP endpoints       |
+| Kafka Consumer | Receives real-time sensor data          |
+| Redis Cache    | Stores alert conditions for fast lookup |
+| Kafka Producer | Sends alert notifications               |
+| PostgreSQL     | Stores alert configurations             |
 
-### 2. Sensor Data Processing
+## Workflow
 
-1. Data from measuring stations is sent to the Kafka topic `sensor_data`
-2. `KafkaService` receives and processes data through the `consumeSensorData` method
-3. For each received data point, the system checks Redis for matching alert conditions
-4. If the data meets an alert condition, the system creates a notification and sends it to Kafka
+1. **Alert Creation**:
+    - Users create alerts via the API (e.g., temperature > 30°C)
+    - Alerts are stored in PostgreSQL and cached in Redis
 
-### 3. Alert Condition Evaluation
+2. **Sensor Data Processing**:
+    - Sensor data arrives via the Kafka topic `sensor_data`
+    - The system checks Redis for matching alert conditions
+    - If conditions are met, a notification is sent via Kafka to the `alert_notification` topic
 
-The system supports various condition types:
-- **EQ**: Equal
-- **NEQ**: Not equal
-- **GT**: Greater than
-- **GTE**: Greater than or equal
-- **LT**: Less than
-- **LTE**: Less than or equal
-- **RANGE**: Within a range
-- **OUTSIDE_RANGE**: Outside a range
+3. **Alert Status**:
+    - Alerts trigger with status `alert` when conditions are met
+    - When values normalize, a `resolved` notification is sent
 
-### 4. Alert Status Management
+## Supported Condition Types
 
-- When an alert condition is detected, the system sends a notification with status `alert`
-- The system tracks triggered alerts in Redis
-- When values return to normal, the system sends a resolution notification with status `resolved`
+| Operator      | Description           |
+|---------------|-----------------------|
+| EQ            | Equal                 |
+| NEQ           | Not equal             |
+| GT            | Greater than          |
+| GTE           | Greater than or equal |
+| LT            | Less than             |
+| LTE           | Less than or equal    |
+| RANGE         | Within a range        |
+| OUTSIDE_RANGE | Outside a range       |
 
-## Source Code Structure
-
-### Main Packages
-
-- **controller**: Handles REST API
-- **service**: Business logic
-    - **AlertService**: Manages alerts
-    - **CacheService**: Handles Redis cache
-    - **KafkaService**: Processes Kafka data
-    - **SyncService**: Synchronizes data
-- **model**: Data objects
-- **repository**: PostgreSQL data access
-- **config**: Redis, Kafka configuration, etc.
-- **constant**: System constants
-- **utils**: Helper utilities
-
-### Main Objects
-
-#### Alert
-```
-- uid: Unique identifier
-- name: Alert name
-- userId: User ID
-- stationId: Station ID
-- message: Notification content
-- silenced: Notification mute flag (0/1)
-- status: Status (active, deleted)
-- conditions: List of conditions
-```
-
-#### AlertCondition
-```
-- uid: Unique identifier
-- metricId: Sensor ID
-- metricName: Parameter name
-- threshold: Single threshold
-- thresholdMin: Lower threshold (for RANGE)
-- thresholdMax: Upper threshold (for RANGE)
-- operator: Comparison operator
-- severity: Severity level
-```
-
-#### SensorData
-```
-- value: Measured value
-- sensorId: Sensor ID
-- metric: Parameter type
-- stationId: Station ID
-- datetime: Measurement time
-- unit: Measurement unit
-```
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/alert/create/{userId}` | POST | Create a new alert |
-| `/api/v1/alert/get/{userId}` | GET | Get user's alerts |
-| `/api/v1/alert/update/{alertId}` | PUT | Update alert |
-| `/api/v1/alert/delete/{alertId}` | DELETE | Delete alert |
-| `/api/v1/alert/{alertId}/status/{status}` | PUT | Update alert status |
-
-## Detailed Data Flow
-
-1. **System startup**:
-    - `SyncService` synchronizes all active alerts to Redis
-    - System is ready to receive data
-
-2. **User creates an alert**:
-    - API receives request and routes to `AlertController`
-    - `AlertService` saves alert to database
-    - `CacheService` updates Redis
-
-3. **Sensor data**:
-    - Data arrives at Kafka topic `sensor_data`
-    - `KafkaService` receives and converts to `SensorData` object
-    - `KafkaService.processSensorData()` queries Redis for matching alert conditions
-    - `KafkaService.evaluateCondition()` evaluates conditions
-    - If satisfied, calls `triggerAlert()` and sends notification via Kafka
-
-4. **User views and manages alerts**:
-    - Uses API to get, update, delete alerts
-    - Each change updates both database and Redis
-
-## Installation and Running the System
+## System Setup
 
 ### Requirements
-- Java 21
-- Maven 3.4+
-- PostgreSQL
-- Redis
-- Kafka
 
-### Installation Steps
+| Tool       | Version  | Purpose                 |
+|------------|----------|-------------------------|
+| Java       | 21       | Runs the application    |
+| Maven      | 3.4+     | Builds the application  |
+| PostgreSQL | Latest   | Stores alert data       |
+| Redis      | Latest   | Caches alert conditions |
+| Kafka      | Existing | Streams sensor data     |
 
-1. **Configure Redis**:
-   ```bash
-   docker run -d -p 6379:6379 --name redis redis
-   ```
+### Database Setup
 
-2. **Configure `application.yml`**:
-    - Change PostgreSQL connection info
-    - Change Redis connection info
-    - Change Kafka connection info
+Run this SQL script to set up the `alert_dev` database and `alert` table:
 
-3. **Build and run application**:
-   ```bash
-   ./mvnw clean package
-   java -jar target/alert-0.0.1-SNAPSHOT.jar
-   ```
+```sql
+-- Create the alert_dev database if it doesn't exist
+CREATE
+DATABASE alert_dev;
 
-## Usage Examples
+-- Connect to the alert_dev database
+\c
+alert_dev
 
-### 1. Create a New Alert
+-- Create the alert table
+CREATE TABLE alert
+(
+    uid        UUID PRIMARY KEY,
+    user_id    INTEGER      NOT NULL,
+    name       VARCHAR(255) NOT NULL,
+    station_id INTEGER      NOT NULL,
+    message    TEXT,
+    conditions TEXT,
+    silenced   INTEGER DEFAULT 0,
+    status     VARCHAR(50)  NOT NULL,
+    created_at TIMESTAMP    NOT NULL,
+    updated_at TIMESTAMP    NOT NULL
+);
+
+-- Add indexes
+CREATE INDEX idx_alert_user_id ON alert (user_id);
+CREATE INDEX idx_alert_station_id ON alert (station_id);
+CREATE INDEX idx_alert_status ON alert (status);
+```
+
+Execute the script:
 
 ```bash
-curl -X POST "http://localhost:3001/api/v1/alert/create/123" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "High Temperature",
-    "stationId": 456,
-    "message": "Temperature exceeds allowed threshold",
-    "silenced": 0,
-    "status": "active",
+psql -U your_username -f init-db.sql
+```
+
+Replace `your_username` with your PostgreSQL username.
+
+### Configuration
+
+1. Create a `.env` file in the project root with these settings:
+
+```
+DB_HOST=your_db_host
+DB_PORT=5432
+DB_NAME=alert_dev
+DB_USERNAME=your_db_username
+DB_PASSWORD=your_db_password
+REDIS_HOST=your_redis_host
+REDIS_PORT=6379
+REDIS_PASSWORD=your_redis_password
+KAFKA_BOOTSTRAP_SERVERS=your_kafka_server:9092
+```
+
+2. Update `application.yml` to use these variables:
+
+```yaml
+spring:
+  application:
+    name: alert
+  datasource:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    consumer:
+      group-id: clickhuse-consumer
+      auto-offset-reset: latest
+server:
+  port: 3001
+  servlet:
+    context-path: /api/v0
+kafka:
+  alert-topic: sensor_data
+  message-topic: alert_notification
+```
+
+3. Add `.env` to `.gitignore`:
+
+```
+.env
+```
+
+## Deployment on Ubuntu (Production)
+
+### 1. Install Tools
+
+Update the system and install dependencies:
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y openjdk-21-jdk maven postgresql redis-server
+```
+
+Verify installations:
+
+```bash
+java -version
+mvn -version
+psql --version
+redis-cli --version
+```
+
+### 2. Configure PostgreSQL
+
+Set up user and database:
+
+```bash
+sudo -u postgres psql -c "CREATE USER your_username WITH PASSWORD 'your_db_password';"
+sudo -u postgres psql -f init-db.sql
+```
+
+Adjust `your_username` and `your_db_password` to match your `.env`.
+
+### 3. Configure Redis
+
+Start Redis:
+
+```bash
+sudo systemctl enable redis
+sudo systemctl start redis
+```
+
+Verify Redis:
+
+```bash
+redis-cli ping
+```
+
+Should return `PONG`.
+
+### 4. Clone the Repository
+
+Clone and navigate to the project:
+
+```bash
+git clone <your-repository-url>
+cd alert-system
+```
+
+### 5. Configure Environment
+
+Create and secure the `.env` file:
+
+```bash
+chmod 600 .env
+```
+
+### 6. Build and Run
+
+Build the application:
+
+```bash
+mvn clean package
+```
+
+Run it in the background:
+
+```bash
+export $(cat .env | xargs) && nohup java -jar target/alert-0.0.1-SNAPSHOT.jar &
+```
+
+Check logs:
+
+```bash
+tail -f nohup.out
+```
+
+API will be available at `http://<your-server-ip>:3001/api/v0`.
+
+### 7. Set Up as a Systemd Service (Optional)
+
+Create a service file:
+
+```bash
+sudo nano /etc/systemd/system/alert-system.service
+```
+
+Add this content:
+
+```
+[Unit]
+Description=AquaTech Alert System
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'export $(cat /path/to/alert-system/.env | xargs) && java -jar /path/to/alert-system/target/alert-0.0.1-SNAPSHOT.jar'
+WorkingDirectory=/path/to/alert-system
+Restart=always
+User=your_username
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Replace `/path/to/alert-system` and `your_username` as needed.
+
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable alert-system
+sudo systemctl start alert-system
+```
+
+Check status:
+
+```bash
+sudo systemctl status alert-system
+```
+
+## API Documentation
+
+The API is hosted at `/api/v0/alert` and returns JSON. Authentication is not required but recommended for production (
+e.g., JWT/OAuth).
+
+### Response Format
+
+**Success**:
+
+```json
+{
+  "success": true,
+  "message": "string",
+  "data": {
+    /* response data */
+  }
+}
+```
+
+**Error**:
+
+```json
+{
+  "success": false,
+  "message": "string",
+  "errorCode": "int",
+  "errors": {
+    /* error details */
+  }
+}
+```
+
+### HTTP Status Codes
+
+| Code | Meaning              |
+|------|----------------------|
+| 200  | Success              |
+| 201  | Created successfully |
+| 400  | Invalid input        |
+| 404  | Resource not found   |
+| 500  | Server error         |
+
+### Endpoints
+
+| Endpoint                                  | Method | Description         |
+|-------------------------------------------|--------|---------------------|
+| `/api/v0/alert/create/{userId}`           | POST   | Create a new alert  |
+| `/api/v0/alert/get/{userId}`              | GET    | Get user's alerts   |
+| `/api/v0/alert/update/{alertId}`          | PUT    | Update an alert     |
+| `/api/v0/alert/delete/{alertId}`          | DELETE | Delete an alert     |
+| `/api/v0/alert/{alertId}/status/{status}` | PUT    | Update alert status |
+
+#### 1. Create Alert
+
+- **Method**: POST
+- **Path**: `/api/v0/alert/create/{userId}`
+- **Description**: Creates a new alert for a user
+- **Path Parameter**: `userId` (integer)
+- **Request Body**: Alert object (see Data Models)
+- **Response Codes**: 201, 400, 500
+
+**Example Request**:
+
+```json
+{
+  "name": "High Temperature Alert",
+  "stationId": 1,
+  "message": "Temperature exceeds threshold!",
+  "conditions": [
+    {
+      "metricId": 101,
+      "metricName": "temperature",
+      "threshold": 30.0,
+      "operator": "GT",
+      "severity": 2
+    }
+  ],
+  "silenced": 0,
+  "status": "active"
+}
+```
+
+**Example Response (201)**:
+
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "uid": "123e4567-e89b-12d3-a456-426614174000",
+    "name": "High Temperature Alert",
+    "stationId": 1,
+    "message": "Temperature exceeds threshold!",
     "conditions": [
       {
+        "uid": "123e4567-e89b-12d3-a456-426614174001",
+        "metricId": 101,
         "metricName": "temperature",
         "threshold": 30.0,
         "operator": "GT",
         "severity": 2
       }
-    ]
-  }'
+    ],
+    "silenced": 0,
+    "status": "active",
+    "createdAt": "2025-04-19T10:00:00",
+    "updatedAt": "2025-04-19T10:00:00"
+  }
+}
 ```
 
-### 2. Receive Sensor Data (Simulating Kafka delivery)
+#### 2. Get Alerts
+
+- **Method**: GET
+- **Path**: `/api/v0/alert/get/{userId}`
+- **Description**: Retrieves all alerts for a user
+- **Path Parameter**: `userId` (integer)
+- **Response Codes**: 200, 400, 500
+
+**Example Response (200)**:
+
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": [
+    {
+      "uid": "123e4567-e89b-12d3-a456-426614174000",
+      "name": "High Temperature Alert",
+      "stationId": 1,
+      "message": "Temperature exceeds threshold!",
+      "conditions": [
+        {
+          "uid": "123e4567-e89b-12d3-a456-426614174001",
+          "metricId": 101,
+          "metricName": "temperature",
+          "threshold": 30.0,
+          "operator": "GT",
+          "severity": 2
+        }
+      ],
+      "silenced": 0,
+      "status": "active",
+      "createdAt": "2025-04-19T10:00:00",
+      "updatedAt": "2025-04-19T10:00:00"
+    }
+  ]
+}
+```
+
+#### 3. Update Alert
+
+- **Method**: PUT
+- **Path**: `/api/v0/alert/update/{alertId}`
+- **Description**: Updates an existing alert
+- **Path Parameter**: `alertId` (UUID string)
+- **Request Body**: Updated alert object
+- **Response Codes**: 200, 400, 404, 500
+
+**Example Request**:
+
+```json
+{
+  "name": "Updated Temperature Alert",
+  "stationId": 1,
+  "message": "Temperature exceeds new threshold!",
+  "conditions": [
+    {
+      "metricId": 101,
+      "metricName": "temperature",
+      "threshold": 35.0,
+      "operator": "GT",
+      "severity": 3
+    }
+  ],
+  "silenced": 0,
+  "status": "active"
+}
+```
+
+**Example Response (200)**:
+
+```json
+{
+  "success": true,
+  "message": "Success",
+  "data": {
+    "uid": "123e4567-e89b-12d3-a456-426614174000",
+    "name": "Updated Temperature Alert",
+    "stationId": 1,
+    "message": "Temperature exceeds new threshold!",
+    "conditions": [
+      {
+        "uid": "123e4567-e89b-12d3-a456-426614174002",
+        "metricId": 101,
+        "metricName": "temperature",
+        "threshold": 35.0,
+        "operator": "GT",
+        "severity": 3
+      }
+    ],
+    "silenced": 0,
+    "status": "active",
+    "createdAt": "2025-04-19T10:00:00",
+    "updatedAt": "2025-04-19T11:00:00"
+  }
+}
+```
+
+#### 4. Delete Alert
+
+- **Method**: DELETE
+- **Path**: `/api/v0/alert/delete/{alertId}`
+- **Description**: Deletes an alert
+- **Path Parameter**: `alertId` (UUID string)
+- **Response Codes**: 200, 400, 404, 500
+
+**Example Response (200)**:
+
+```json
+{
+  "success": true,
+  "message": "Alert deleted successfully"
+}
+```
+
+#### 5. Update Alert Status
+
+- **Method**: PUT
+- **Path**: `/api/v0/alert/{alertId}/status/{status}`
+- **Description**: Updates an alert's status (e.g., "active", "resolved")
+- **Path Parameters**: `alertId` (UUID string), `status` (string)
+- **Response Codes**: 200, 400, 404, 500
+
+**Example Response (200)**:
+
+```json
+{
+  "success": true,
+  "message": "Status updated successfully",
+  "data": {
+    "uid": "123e4567-e89b-12d3-a456-426614174000",
+    "name": "High Temperature Alert",
+    "stationId": 1,
+    "message": "Temperature exceeds threshold!",
+    "conditions": [
+      {
+        "uid": "123e4567-e89b-12d3-a456-426614174001",
+        "metricId": 101,
+        "metricName": "temperature",
+        "threshold": 30.0,
+        "operator": "GT",
+        "severity": 2
+      }
+    ],
+    "silenced": 0,
+    "status": "resolved",
+    "createdAt": "2025-04-19T10:00:00",
+    "updatedAt": "2025-04-19T12:00:00"
+  }
+}
+```
+
+## Data Models
+
+### Alert
+
+```json
+{
+  "uid": "string",
+  "userId": "integer",
+  "name": "string",
+  "stationId": "integer",
+  "message": "string",
+  "conditions": [
+    {
+      "metricId": "integer",
+      "metricName": "string",
+      "threshold": "number",
+      "operator": "string",
+      "severity": "integer"
+    }
+  ],
+  "silenced": "integer",
+  "status": "string",
+  "createdAt": "string",
+  "updatedAt": "string"
+}
+```
+
+For create/update, omit `uid`, `createdAt`, `updatedAt`.
+
+**conditions**: Array of condition objects:
+
+- `metricId`: Metric ID
+- `metricName`: Metric name (e.g., "temperature")
+- `threshold`: Threshold value
+- `operator`: Comparison operator (e.g., "GT")
+- `severity`: Severity level (integer)
+
+### Sensor Data
 
 ```json
 {
   "value": 32.5,
-  "sensor_id": 789,
+  "sensorId": 101,
   "metric": "temperature",
-  "station_id": 456,
-  "datetime": "2023-06-15 10:30:45",
-  "unit": "°C"
+  "stationId": 1,
+  "datetime": "2025-04-19 10:00:00",
+  "unit": "C"
 }
 ```
 
-### 3. Alert Processing
+## Redis Structure
 
-The system will:
-- Detect value 32.5°C > 30.0°C
-- Create alert and send to Kafka
-- Save state in Redis
+Redis stores alert conditions with this key format:
+`station:{stationId}:alert:{alertId}:metric:{metricId}:condition:{conditionId}`
 
-## Redis Structure Explanation
+| Example Key                                          | Description                           |
+|------------------------------------------------------|---------------------------------------|
+| `station:1:alert:a1b2c3:metric:101:condition:d4e5f6` | Condition for metric 101 at station 1 |
 
-Redis stores alert conditions in the format:
-```
-station:{stationId}:alert:{alertId}:metric:{metricId}:condition:{conditionId}
-```
+Each key holds JSON data about the alert condition.
 
-Example:
-```
-station:456:alert:a1b2c3:metric:789:condition:d4e5f6
-```
+## Source Code Structure
 
-Each key stores JSON information about the alert condition and related information.
+| Package      | Purpose                       |
+|--------------|-------------------------------|
+| `controller` | Handles REST API endpoints    |
+| `service`    | Business logic                |
+| `model`      | Data objects                  |
+| `repository` | PostgreSQL data access        |
+| `config`     | Configurations (Redis, Kafka) |
+| `constant`   | System constants              |
+| `utils`      | Helper utilities              |
 
 ## Development Tips
 
-1. Always check logs in `logs/alert.log` when experiencing issues
-2. Use Redis CLI to view data in Redis
-3. Use Kafka tools to check messages
-4. APIs can be tested using Postman or curl
+- Check logs in `logs/alert.log` for debugging
+- Use Redis CLI to inspect cached data
+- Test APIs with Postman or curl
+
+## Future Improvements
+
+- Add JWT/OAuth for API security
+- Implement rate limiting
+- Add pagination for the get alerts endpoint
+- Provide OpenAPI/Swagger documentation

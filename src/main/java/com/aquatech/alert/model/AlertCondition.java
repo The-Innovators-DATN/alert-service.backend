@@ -33,4 +33,5 @@ public class AlertCondition {
     private String operator;
 
     private Integer severity;
+
 }

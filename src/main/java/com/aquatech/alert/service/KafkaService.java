@@ -94,7 +94,8 @@ public class KafkaService {
                     continue;
                 }
 
-                Map<String, Object> conditionData = objectMapper.readValue(jsonValue, new TypeReference<Map<String, Object>>() {});
+                Map<String, Object> conditionData = objectMapper.readValue(jsonValue, new TypeReference<>() {
+                });
 
                 String alertId = (String) conditionData.get(RedisConstant.KEY_ALERT_ID);
                 String alertName = (String) conditionData.get(RedisConstant.KEY_ALERT_NAME);
@@ -118,14 +119,14 @@ public class KafkaService {
                 if (conditionMet && trackingKeyCondition.isEmpty()) {
                     log.info("Alert condition met for key: {}", key);
                     triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                            threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.STATUS_ALERT);
+                            threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.TYPE_ALERT);
                     redisTemplate.opsForValue().set(RedisConstant.TRACKING_PREFIX + conditionUid, "true", Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
                 } else if (!conditionMet && !trackingKeyCondition.isEmpty()) {
                     log.info("Alert condition resolved {}", key);
                     message = "Alert condition resolved for " + sensorData.getMetric() +
                             " with value: " + currentValue;
                     triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                            threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.STATUS_RESOLVED);
+                            threshold, thresholdMin, thresholdMax, currentValue, AlertConstant.TYPE_RESOLVED);
                     redisTemplate.delete(RedisConstant.TRACKING_PREFIX + conditionUid);
                 }
             } catch (Exception e) {
@@ -224,7 +225,7 @@ public class KafkaService {
             Double thresholdMin,
             Double thresholdMax,
             Double currentValue,
-            String status
+            String typeMessage
     ) {
         // Implement alert notification logic
         // This could send an email, SMS, push notification, etc.
@@ -243,7 +244,7 @@ public class KafkaService {
         notification.setTriggeredThresholdMin(thresholdMin);
         notification.setTriggeredThresholdMax(thresholdMax);
         notification.setTriggeredValue(currentValue);
-        notification.setStatus(status);
+        notification.setTypeMessage(typeMessage);
 
         // Send the notification
         sendAlertNotification(notification);

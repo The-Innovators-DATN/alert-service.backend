@@ -2,9 +2,9 @@ spring:
   application:
     name: alert
   datasource:
-    url: jdbc:postgresql://160.191.49.50:5432/alert_dev
-    username: wqSysadmin
-    password: asd123
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
   jpa:
     show-sql: true
@@ -16,19 +16,20 @@ spring:
     open-in-view: false
   data:
     redis:
-      host: 160.191.49.65
-      port: 6379
-      password: redis_pwd
-      db: 1
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      db: ${REDIS_DB}
+      # password: ${REDIS_PASSWORD}
+
   kafka:
-    bootstrap-servers: 103.172.79.28:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
     consumer:
-      group-id: clickhuse-consumer
+      group-id: ${KAFKA_GROUP_ID}
       auto-offset-reset: latest
 server:
   port: 3001
   servlet:
     context-path: /api/v0
 kafka:
-    alert-topic: sensor_metric
-    message-topic: alert_notification
+  alert-topic: ${KAFKA_ALERT_TOPIC}
+  message-topic: ${KAFKA_MESSAGE_TOPIC}
