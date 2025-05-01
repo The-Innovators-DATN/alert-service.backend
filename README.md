@@ -425,7 +425,7 @@ e.g., JWT/OAuth).
 #### 2. Get Alerts
 
 - **Method**: GET
-- **Path**: `/api/v0/alert/get/{userId}`
+- **Path**: `/api/v0/alert/get/user/{userId}`
 - **Description**: Retrieves all alerts for a user
 - **Path Parameter**: `userId` (integer)
 - **Response Codes**: 200, 400, 500
