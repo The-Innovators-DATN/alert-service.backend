@@ -21,7 +21,7 @@ public class AlertController {
         return ResponseEntity.ok().body(new SuccessApiResponse<>(alertService.createAlert(userId, alertDto)));
     }
 
-    @GetMapping("get/{userId}")
+    @GetMapping("get/user/{userId}")
     public ResponseEntity<?> getAlertsByUserId(
             @PathVariable Integer userId
     ) {
@@ -52,7 +52,7 @@ public class AlertController {
         return ResponseEntity.ok().body(new SuccessApiResponse<>(alertService.updateAlertStatus(alertId, status)));
     }
 
-    @GetMapping("get/{alertId}")
+    @GetMapping("get/alert/{alertId}")
     public ResponseEntity<?> getAlertById(
             @PathVariable String alertId
     ) {
