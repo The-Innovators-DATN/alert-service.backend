@@ -18,7 +18,7 @@ public interface AlertRepository extends JpaRepository<Alert, UUID> {
     @Query("SELECT a FROM Alert a WHERE a.userId = ?1 AND a.stationId = ?2 AND a.status != 'deleted'")
     Optional<Alert> findActiveAlertByUserIdAndStationId(Integer userId, Integer stationId);
 
-    @Query("SELECT a FROM Alert a WHERE a.status = 'active' AND a.silenced = 0")
+    @Query("SELECT a FROM Alert a WHERE a.status = 'active'")
     List<Alert> getAllActiveAlerts();
 
     @Transactional

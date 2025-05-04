@@ -50,7 +50,7 @@ public class AlertService {
         }
         Alert createdAlert = alertRepository.save(alert);
 
-        if (createdAlert.getSilenced() != 1 && createdAlert.getStatus().equals("active")) {
+        if (createdAlert.getStatus().equals("active")) {
             cacheService.setCache(createdAlert);
         }
 
@@ -87,11 +87,10 @@ public class AlertService {
         alert.setUpdatedAt(LocalDateTime.now());
         Alert updatedAlert = alertRepository.save(alert);
 
-        if (updatedAlert.getSilenced() != 1 && updatedAlert.getStatus().equals("active")) {
+        if (updatedAlert.getStatus().equals("active")) {
             cacheService.setCache(updatedAlert);
         } else {
-            if (updatedAlert.getSilenced() == 1 && silenced == 0
-                || !updatedAlert.getStatus().equals("active") && status.equals("active")) {
+            if (status.equals("active")) {
                 cacheService.removeCache(updatedAlert);
             }
         }
@@ -124,10 +123,10 @@ public class AlertService {
 
         Alert updatedAlert = alertRepository.save(alert);
 
-        if (updatedAlert.getSilenced() != 1 && status.equals("active")) {
+        if (status.equals("active")) {
             cacheService.setCache(updatedAlert);
         } else {
-            if (updatedAlert.getSilenced() != 1 && statusAlert.equals("active")) {
+            if (statusAlert.equals("active")) {
                 cacheService.removeCache(updatedAlert);
             }
         }

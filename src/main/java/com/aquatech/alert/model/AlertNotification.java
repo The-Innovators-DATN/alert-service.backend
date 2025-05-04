@@ -39,6 +39,9 @@ public class AlertNotification {
     @JsonProperty("type_message")
     private String typeMessage;
 
+    @JsonProperty("silenced")
+    private Integer silenced;
+
     // Trigger Condition
     @JsonProperty("metric_id")
     private Integer triggeredMetricId;

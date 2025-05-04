@@ -55,7 +55,7 @@ public class CacheUtils {
         valueMap.put(RedisConstant.KEY_THRESHOLD, condition.getThreshold());
         valueMap.put(RedisConstant.KEY_THRESHOLD_MIN, condition.getThresholdMin());
         valueMap.put(RedisConstant.KEY_THRESHOLD_MAX, condition.getThresholdMax());
-
+        valueMap.put(RedisConstant.KEY_SILENCED, alert.getSilenced());
         return valueMap;
     }
 

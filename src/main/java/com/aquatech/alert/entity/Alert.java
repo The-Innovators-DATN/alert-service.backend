@@ -31,7 +31,7 @@ public class Alert {
     @Column(name = "uid", updatable = false, nullable = false)
     private UUID uid;
 
-    @Column(name = "name", nullable = false, length = 255)
+    @Column(name = "name", nullable = false)
     private String name;
 
     @Column(name = "user_id", nullable = false)
@@ -40,7 +40,7 @@ public class Alert {
     @Column(name = "station_id", nullable = false)
     private Integer stationId;
 
-    @Column(name = "message", nullable = false, length = 255)
+    @Column(name = "message", nullable = false)
     private String message;
 
     @Column(name = "silenced", nullable = false)
