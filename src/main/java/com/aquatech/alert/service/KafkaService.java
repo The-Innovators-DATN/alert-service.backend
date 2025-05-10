@@ -9,6 +9,8 @@ import com.aquatech.alert.utils.CacheUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -36,6 +38,9 @@ public class KafkaService {
 
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
+
+    @Autowired
+    private RedissonClient redissonClient;
 
     @KafkaListener(topics = "${kafka.alert-topic}", groupId = "${spring.kafka.consumer.group-id}")
     public void consumeSensorData(String message) {
@@ -111,25 +116,32 @@ public class KafkaService {
 
                 Double currentValue = sensorData.getValue();
 
-                boolean conditionMet = evaluateCondition(
-                        operator, currentValue, threshold, thresholdMin, thresholdMax
-                );
+                RLock lock = redissonClient.getLock("lock:tracking:" + conditionUid);
+                lock.lock();
+                try{
+                    boolean conditionMet = evaluateCondition(
+                            operator, currentValue, threshold, thresholdMin, thresholdMax
+                    );
 
-                Set<String> trackingKeyCondition = redisTemplate.keys(RedisConstant.TRACKING_PREFIX + conditionUid);
+                    Set<String> trackingKeyCondition = redisTemplate.keys(RedisConstant.TRACKING_PREFIX + conditionUid);
 
-                if (conditionMet && trackingKeyCondition.isEmpty()) {
-                    log.info("Alert condition met for key: {}", key);
-                    triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                            threshold, thresholdMin, thresholdMax, currentValue, silenced, AlertConstant.TYPE_ALERT);
-                    redisTemplate.opsForValue().set(RedisConstant.TRACKING_PREFIX + conditionUid, "true", Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
-                } else if (!conditionMet && !trackingKeyCondition.isEmpty()) {
-                    log.info("Alert condition resolved {}", key);
-                    message = "Alert condition resolved for " + sensorData.getMetric() +
-                            " with value: " + currentValue;
-                    triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                            threshold, thresholdMin, thresholdMax, currentValue, silenced, AlertConstant.TYPE_RESOLVED);
-                    redisTemplate.delete(RedisConstant.TRACKING_PREFIX + conditionUid);
+                    if (conditionMet && trackingKeyCondition.isEmpty()) {
+                        log.info("Alert condition met for key: {}", key);
+                        triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
+                                threshold, thresholdMin, thresholdMax, currentValue, silenced, AlertConstant.TYPE_ALERT);
+                        redisTemplate.opsForValue().set(RedisConstant.TRACKING_PREFIX + conditionUid, "true", Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
+                    } else if (!conditionMet && !trackingKeyCondition.isEmpty()) {
+                        log.info("Alert condition resolved {}", key);
+                        message = "Alert condition resolved for " + sensorData.getMetric() +
+                                " with value: " + currentValue;
+                        triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
+                                threshold, thresholdMin, thresholdMax, currentValue, silenced, AlertConstant.TYPE_RESOLVED);
+                        redisTemplate.delete(RedisConstant.TRACKING_PREFIX + conditionUid);
+                    }
+                } finally {
+                    lock.unlock();
                 }
+
             } catch (Exception e) {
                 log.error("Error processing key {}: {}", key, e.getMessage(), e);
             }
@@ -139,23 +151,13 @@ public class KafkaService {
 
     private Double parseDoubleValue(Object value) {
         switch (value) {
-            case null -> {
-                return null;
-            }
-            case Number number -> {
-                return number.doubleValue();
-            }
+            case null -> { return null; }
+            case Number number -> { return number.doubleValue(); }
             case String s -> {
-                try {
-                    return Double.parseDouble(s);
-                } catch (NumberFormatException e) {
-                    return null;
-                }
+                try { return Double.parseDouble(s); } catch (NumberFormatException e) { return null; }
             }
-            default -> {
-            }
+            default -> { }
         }
-
         return null;
     }
 
