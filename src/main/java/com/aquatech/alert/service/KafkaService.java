@@ -23,239 +23,140 @@ import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @Slf4j
 public class KafkaService {
+
     @Value("${kafka.message-topic}")
     private String alertNotificationTopic;
 
-    @Autowired
-    private KafkaTemplate<String, String> kafkaTemplate;
+    @Autowired private KafkaTemplate<String, String> kafkaTemplate;
+    @Autowired private ObjectMapper objectMapper;
+    @Autowired private RedisTemplate<String, Object> redisTemplate;
+    @Autowired private RedissonClient redissonClient;
 
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @Autowired
-    private RedisTemplate<String, Object> redisTemplate;
-
-    @Autowired
-    private RedissonClient redissonClient;
-
-    @KafkaListener(topics = "${kafka.alert-topic}", groupId = "${spring.kafka.consumer.group-id}")
-    public void consumeSensorData(String message) {
-        log.info("Received message: {}", message);
-
+    @KafkaListener(
+            topics = "${kafka.alert-topic}",
+            groupId = "${spring.kafka.consumer.group-id}"
+//            concurrency = "${kafka.listener.concurrency:4}"
+    )
+    public void consumeSensorData(String messagePayload) {
         try {
-            // Convert the JSON string to SensorData object
-            SensorData sensorData = objectMapper.readValue(message, SensorData.class);
-
-            // Log the converted object
-            log.info("Converted to SensorData: metric={}, value={}, station={}, datetime={}, unit={}",
-                    sensorData.getMetric(), sensorData.getValue(), sensorData.getStationId(),
-                    sensorData.getDatetime(), sensorData.getUnit());
-
-            processSensorData(sensorData);
-
-        } catch (Exception e) {
-            log.error("Error processing message: {}", e.getMessage(), e);
+            SensorData sensorData = objectMapper.readValue(messagePayload, SensorData.class);
+            log.debug("[consumeSensorData] stationId={} metric={} value={}",
+                    sensorData.getStationId(), sensorData.getMetric(), sensorData.getValue());
+            evaluateSensorData(sensorData);
+        } catch (Exception ex) {
+            log.error("[consumeSensorData] Parse error. payload={}", messagePayload, ex);
         }
     }
 
-    /**
-     * Send alert notification to Kafka
-     */
-    public void sendAlertNotification(AlertNotification notification) {
-        try {
-            String message = objectMapper.writeValueAsString(notification);
-            kafkaTemplate.send(alertNotificationTopic, message);
-            log.info("Alert notification sent to topic: {}", alertNotificationTopic);
-        } catch (Exception e) {
-            log.error("Error sending alert notification: {}", e.getMessage(), e);
-        }
-    }
-
-
-    private void processSensorData(SensorData sensorData) {
-        String keyPattern = CacheUtils.buildCacheKey(
-                sensorData.getStationId().toString(),
-                "*",
-                sensorData.getSensorId().toString(),
-                "*"
-        );
-
-        Set<String> matchingKeys = redisTemplate.keys(keyPattern);
-
-        if (matchingKeys.isEmpty()) {
-            log.info("No alert conditions found for stationId: {} and sensorId: {}",
-                    sensorData.getStationId(), sensorData.getSensorId());
+    private void evaluateSensorData(SensorData sensorData) {
+        String indexKey = CacheUtils.buildIndexKey(sensorData.getStationId(), sensorData.getSensorId());
+        Set<Object> cacheKeys = redisTemplate.opsForSet().members(indexKey);
+        if (cacheKeys == null || cacheKeys.isEmpty()) {
+            log.trace("[evaluateSensorData] No conditions for indexKey={}", indexKey);
             return;
         }
 
-        for (String key: matchingKeys) {
+        double currentValue = sensorData.getValue();
+        cacheKeys.forEach(rawKey -> {
+            String cacheKey = rawKey.toString();
             try {
-                String jsonValue = (String) redisTemplate.opsForValue().get(key);
-                if (jsonValue == null) {
-                    continue;
+                String jsonValue = (String) redisTemplate.opsForValue().get(cacheKey);
+                if (jsonValue == null) return;
+
+                Map<String, Object> conditionMap = objectMapper.readValue(jsonValue, new TypeReference<>() {});
+                String conditionUid = (String) conditionMap.get(RedisConstant.KEY_CONDITION_UID);
+
+                boolean isMet = evaluateCondition(
+                        (String) conditionMap.get(RedisConstant.KEY_OPERATOR),
+                        currentValue,
+                        toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD)),
+                        toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MIN)),
+                        toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MAX)));
+
+                RLock trackingLock = redissonClient.getLock("lock:tracking:" + conditionUid);
+                if (!trackingLock.tryLock(5, 2, TimeUnit.SECONDS)) {
+                    log.warn("[evaluateSensorData] Could not acquire lock for conditionUid={}", conditionUid);
+                    return;
                 }
 
-                Map<String, Object> conditionData = objectMapper.readValue(jsonValue, new TypeReference<>() {
-                });
+                try {
+                    String trackingKey = RedisConstant.TRACKING_PREFIX + conditionUid;
+                    boolean trackingExists = redisTemplate.hasKey(trackingKey);
 
-                String alertId = (String) conditionData.get(RedisConstant.KEY_ALERT_ID);
-                String alertName = (String) conditionData.get(RedisConstant.KEY_ALERT_NAME);
-                Integer userId = (Integer) conditionData.get(RedisConstant.KEY_USER_ID);
-                String message = (String) conditionData.get(RedisConstant.KEY_MESSAGE);
-                String conditionUid = (String) conditionData.get(RedisConstant.KEY_CONDITION_UID);
-                Integer severity = (Integer) conditionData.get(RedisConstant.KEY_SEVERITY);
-                String operator = (String) conditionData.get(RedisConstant.KEY_OPERATOR);
-                Double threshold = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD));
-                Double thresholdMin = parseDoubleValue(conditionData.get(RedisConstant.KEY_THRESHOLD_MIN));
-                Double thresholdMax = parseDoubleValue(conditionData.get("threshold_max"));
-                Integer silenced = (Integer) conditionData.get(RedisConstant.KEY_SILENCED);
-
-                Double currentValue = sensorData.getValue();
-
-                RLock lock = redissonClient.getLock("lock:tracking:" + conditionUid);
-                lock.lock();
-                try{
-                    boolean conditionMet = evaluateCondition(
-                            operator, currentValue, threshold, thresholdMin, thresholdMax
-                    );
-
-                    Set<String> trackingKeyCondition = redisTemplate.keys(RedisConstant.TRACKING_PREFIX + conditionUid);
-
-                    if (conditionMet && trackingKeyCondition.isEmpty()) {
-                        log.info("Alert condition met for key: {}", key);
-                        triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                                threshold, thresholdMin, thresholdMax, currentValue, silenced, AlertConstant.TYPE_ALERT);
-                        redisTemplate.opsForValue().set(RedisConstant.TRACKING_PREFIX + conditionUid, "true", Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
-                    } else if (!conditionMet && !trackingKeyCondition.isEmpty()) {
-                        log.info("Alert condition resolved {}", key);
-                        message = "Alert condition resolved for " + sensorData.getMetric() +
-                                " with value: " + currentValue;
-                        triggerAlert(userId, sensorData, severity, message, alertName, alertId, operator,
-                                threshold, thresholdMin, thresholdMax, currentValue, silenced, AlertConstant.TYPE_RESOLVED);
-                        redisTemplate.delete(RedisConstant.TRACKING_PREFIX + conditionUid);
+                    if (isMet && !trackingExists) {
+                        publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_ALERT);
+                        redisTemplate.opsForValue().set(trackingKey, "1",
+                                Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
+                        log.info("[evaluateSensorData] Trigger ALERT conditionUid={} value={}", conditionUid, currentValue);
+                    } else if (!isMet && trackingExists) {
+                        publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_RESOLVED);
+                        redisTemplate.delete(trackingKey);
+                        log.info("[evaluateSensorData] Trigger RESOLVE conditionUid={} value={}", conditionUid, currentValue);
                     }
                 } finally {
-                    lock.unlock();
+                    trackingLock.unlock();
                 }
-
             } catch (Exception e) {
-                log.error("Error processing key {}: {}", key, e.getMessage(), e);
+                log.error("[evaluateSensorData] Error processing cacheKey={}", cacheKey, e);
             }
-        }
-
+        });
     }
 
-    private Double parseDoubleValue(Object value) {
-        switch (value) {
-            case null -> { return null; }
-            case Number number -> { return number.doubleValue(); }
-            case String s -> {
-                try { return Double.parseDouble(s); } catch (NumberFormatException e) { return null; }
-            }
-            default -> { }
+    private void publishNotification(Map<String, Object> conditionMap, SensorData sensorData,
+                                     Double currentValue, String messageType) {
+        try {
+            AlertNotification notification = new AlertNotification();
+            notification.setAlertId(UUID.fromString((String) conditionMap.get(RedisConstant.KEY_ALERT_ID)));
+            notification.setAlertName((String) conditionMap.get(RedisConstant.KEY_ALERT_NAME));
+            notification.setStationId(sensorData.getStationId());
+            notification.setUserId((Integer) conditionMap.get(RedisConstant.KEY_USER_ID));
+            notification.setMessage((String) conditionMap.get(RedisConstant.KEY_MESSAGE));
+            notification.setSeverity((Integer) conditionMap.get(RedisConstant.KEY_SEVERITY));
+            notification.setTimestamp(LocalDateTime.now());
+            notification.setTypeMessage(messageType);
+            notification.setSilenced((Integer) conditionMap.get(RedisConstant.KEY_SILENCED));
+
+            notification.setTriggeredMetricId(sensorData.getSensorId());
+            notification.setTriggeredMetricName(sensorData.getMetric());
+            notification.setTriggeredOperator((String) conditionMap.get(RedisConstant.KEY_OPERATOR));
+            notification.setTriggeredThreshold(toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD)));
+            notification.setTriggeredThresholdMin(toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MIN)));
+            notification.setTriggeredThresholdMax(toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MAX)));
+            notification.setTriggeredValue(currentValue);
+
+            String notificationJson = objectMapper.writeValueAsString(notification);
+            kafkaTemplate.send(alertNotificationTopic, notificationJson);
+            log.debug("[publishNotification] Sent {} for alertId={} conditionUid={}",
+                    messageType, notification.getAlertId(), notification.getTriggeredMetricId());
+        } catch (Exception e) {
+            log.error("[publishNotification] Serialization/send error", e);
         }
-        return null;
     }
 
-    private boolean evaluateCondition(
-            String operator,
-            Double currentValue,
-            Double threshold,
-            Double thresholdMin,
-            Double thresholdMax
-    ) {
-        if (currentValue == null || operator == null) {
-            log.warn("Current value or operator is null");
-            return false;
-        }
-
+    private boolean evaluateCondition(String operator, Double value, Double threshold,
+                                      Double minThreshold, Double maxThreshold) {
+        if (value == null || operator == null) return false;
         return switch (operator.toUpperCase()) {
-            case OperatorConstant.EQUAL ->
-                    threshold != null &&
-                            Math.abs(currentValue - threshold) < OperatorConstant.THRESHOLD_PRECISION;
-
-            case OperatorConstant.NOT_EQUAL ->
-                    threshold != null &&
-                            Math.abs(currentValue - threshold) >= OperatorConstant.THRESHOLD_PRECISION;
-
-            case OperatorConstant.GREATER_THAN ->
-                    threshold != null &&
-                            currentValue > threshold;
-
-            case OperatorConstant.GREATER_THAN_EQUAL ->
-                    threshold != null &&
-                            currentValue >= threshold;
-
-            case OperatorConstant.LESS_THAN ->
-                    threshold != null &&
-                            currentValue < threshold;
-
-            case OperatorConstant.LESS_THAN_EQUAL ->
-                    threshold != null &&
-                            currentValue <= threshold;
-
-            case OperatorConstant.RANGE ->
-                    thresholdMin != null && thresholdMax != null &&
-                            currentValue >= thresholdMin && currentValue <= thresholdMax;
-
-            case OperatorConstant.OUTSIDE_RANGE ->
-                    thresholdMin != null && thresholdMax != null &&
-                            (currentValue < thresholdMin || currentValue > thresholdMax);
-
-            default -> {
-                log.warn("Unknown operator: {}", operator);
-                yield false;
-            }
+            case OperatorConstant.EQUAL              -> threshold != null && Math.abs(value - threshold) < OperatorConstant.THRESHOLD_PRECISION;
+            case OperatorConstant.NOT_EQUAL          -> threshold != null && Math.abs(value - threshold) >= OperatorConstant.THRESHOLD_PRECISION;
+            case OperatorConstant.GREATER_THAN       -> threshold != null && value > threshold;
+            case OperatorConstant.GREATER_THAN_EQUAL -> threshold != null && value >= threshold;
+            case OperatorConstant.LESS_THAN          -> threshold != null && value < threshold;
+            case OperatorConstant.LESS_THAN_EQUAL    -> threshold != null && value <= threshold;
+            case OperatorConstant.RANGE              -> minThreshold != null && maxThreshold != null && value >= minThreshold && value <= maxThreshold;
+            case OperatorConstant.OUTSIDE_RANGE      -> minThreshold != null && maxThreshold != null && (value < minThreshold || value > maxThreshold);
+            default -> false;
         };
     }
 
-    /**
-     * Trigger an alert based on the condition evaluation
-     */
-    private void triggerAlert(
-            Integer userId,
-            SensorData sensorData,
-            Integer severity,
-            String message,
-            String alertName,
-            String alertId,
-            String operator,
-            Double threshold,
-            Double thresholdMin,
-            Double thresholdMax,
-            Double currentValue,
-            Integer silenced,
-            String typeMessage
-    ) {
-        // Implement alert notification logic
-        // This could push notification, etc.
-        AlertNotification notification = new AlertNotification();
-        notification.setAlertId(UUID.fromString(alertId));
-        notification.setAlertName(alertName);
-        notification.setStationId(sensorData.getStationId());
-        notification.setUserId(userId);
-        notification.setMessage(message);
-        notification.setSeverity(severity);
-        notification.setTimestamp(LocalDateTime.now());
-        notification.setTriggeredMetricId(sensorData.getSensorId());
-        notification.setTriggeredMetricName(sensorData.getMetric());
-        notification.setTriggeredOperator(operator);
-        notification.setTriggeredThreshold(threshold);
-        notification.setTriggeredThresholdMin(thresholdMin);
-        notification.setTriggeredThresholdMax(thresholdMax);
-        notification.setTriggeredValue(currentValue);
-        notification.setTypeMessage(typeMessage);
-        notification.setSilenced(silenced);
-
-        // Send the notification
-        sendAlertNotification(notification);
-
-        log.info("Alert triggered for user {} on station {}, metric {}, value {}, severity {}",
-                userId, sensorData.getStationId(), sensorData.getMetric(),
-                sensorData.getValue(), severity);
+    private Double toDouble(Object obj) {
+        if (obj == null) return null;
+        if (obj instanceof Number num) return num.doubleValue();
+        try { return Double.parseDouble(obj.toString()); } catch (NumberFormatException ignored) { return null; }
     }
 }

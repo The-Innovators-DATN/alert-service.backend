@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Service;
@@ -19,187 +20,163 @@ import static com.aquatech.alert.utils.CacheUtils.getValueKey;
 @Service
 @Slf4j
 public class CacheService {
+
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
     @Autowired
     private ObjectMapper objectMapper;
 
-    public void setCache(Alert alert) {
-        if (alert == null || alert.getStationId() == null || alert.getUid() == null) {
-            log.warn("Cannot cache alert with null values");
+    /* ------------------------------------------------------------------ */
+    /* 1. setCache – write value + create INDEX-SET                       */
+    /* ------------------------------------------------------------------ */
+    public void setCache(Alert alertEntity) {
+        if (alertEntity == null || alertEntity.getStationId() == null || alertEntity.getUid() == null) {
+            log.warn("[setCache] Skip – alert or identifiers are null. alert={}", alertEntity);
             return;
         }
 
-        try {
-            if (alert.getConditions() == null || alert.getConditions().isEmpty()) {
-                log.debug("No conditions to cache for alert {}", alert.getUid());
+        if (alertEntity.getConditions() == null || alertEntity.getConditions().isEmpty()) {
+            log.debug("[setCache] No conditions to cache for alertId={}", alertEntity.getUid());
+            return;
+        }
+
+        alertEntity.getConditions().forEach(condition -> {
+            if (condition.getMetricId() == null) {
+                log.warn("[setCache] Skip condition with null metricId. alertId={} conditionUid={} ",
+                        alertEntity.getUid(), condition.getUid());
                 return;
             }
 
-            for (AlertCondition condition : alert.getConditions()) {
-                if (condition.getMetricId() == null) {
-                    log.warn("Skipping condition with null metricId in alert: {}", alert.getUid());
-                    continue;
-                }
-
-                // Build the Redis key
-                String cacheKey = CacheUtils.buildCacheKey(
-                        alert.getStationId().toString(),
-                        alert.getUid().toString(),
-                        condition.getMetricId().toString(),
-                        condition.getUid().toString()
-                );
-
-                Map<String, Object> valueMap = getValueKey(alert, condition);
-
-                // Convert to JSON and store in Redis with expiration
-                String valueJson = objectMapper.writeValueAsString(valueMap);
-                redisTemplate.opsForValue().set(cacheKey, valueJson);
-
-                log.debug("Cached alert condition: {}", cacheKey);
-            }
-        } catch (Exception e) {
-            log.error("Error setting cache for alert {}: {}", alert.getUid(), e.getMessage());
-        }
-    }
-
-    public void removeCache(Alert alert) {
-        if (alert == null || alert.getStationId() == null || alert.getUid() == null) {
-            log.warn("Cannot remove cache for alert with null values");
-            return;
-        }
-
-        try {
-            String keyPattern = CacheUtils.buildCacheKey(
-                    alert.getStationId().toString(),
-                    alert.getUid().toString(),
-                    "*",
-                    "*"
-            );
-            // Use scan to find all keys matching the pattern
-            redisTemplate.keys(keyPattern).forEach(key -> {
-                redisTemplate.delete(key);
-                log.debug("Removed cache using pattern: {}", key);
-            });
-        } catch (Exception e) {
-            log.error("Error removing cache for alert {}: {}", alert.getUid(), e.getMessage());
-        }
-
-    }
-
-    public Set<String> updateActiveAlerts(List<Alert> alerts) {
-        Set<String> activeKeys = new HashSet<>();
-        List<Map<String, Object>> batchOperations = new ArrayList<>();
-
-        for (Alert alert : alerts) {
-            if (alert.getStationId() == null || alert.getUid() == null || alert.getConditions() == null) {
-                log.warn("Skipping alert with null stationId, id, or conditions: {}", alert.getUid());
-                continue;
-            }
+            String cacheKey = CacheUtils.buildCacheKey(
+                    alertEntity.getStationId().toString(),
+                    alertEntity.getUid().toString(),
+                    condition.getMetricId().toString(),
+                    condition.getUid().toString());
 
             try {
-                for (AlertCondition condition : alert.getConditions()) {
-                    if (condition.getUid() == null) {
-                        log.warn("Skipping condition with null UID for alert: {}", alert.getUid());
-                        continue;
-                    }
+                String payloadJson = objectMapper.writeValueAsString(getValueKey(alertEntity, condition));
+                redisTemplate.opsForValue().set(cacheKey, payloadJson);
 
-                    String cacheKey = CacheUtils.buildCacheKey(
-                            alert.getStationId().toString(),
-                            alert.getUid().toString(),
-                            condition.getMetricId().toString(),
-                            condition.getUid().toString()
-                    );
+                String indexKey = CacheUtils.buildIndexKey(alertEntity.getStationId(), condition.getMetricId());
+                redisTemplate.opsForSet().add(indexKey, cacheKey);
 
-                    Map<String, Object> valueKey = getValueKey(alert, condition);
-
-                    Map<String, Object> operation = new HashMap<>();
-                    operation.put("key", cacheKey);
-                    operation.put("value", objectMapper.writeValueAsString(valueKey));
-                    batchOperations.add(operation);
-
-                    activeKeys.add(cacheKey);
-                }
+                log.debug("[setCache] Cached condition. cacheKey={} indexKey={}", cacheKey, indexKey);
             } catch (Exception e) {
-                log.error("Error processing alert {}: {}", alert.getUid(), e.getMessage());
-            }
-        }
-
-        // Use a loop for batch processing (100 items per batch)
-        int batchSize = 100;
-        for (int i = 0; i < batchOperations.size(); i += batchSize) {
-            int endIndex = Math.min(i + batchSize, batchOperations.size());
-            List<Map<String, Object>> batch = batchOperations.subList(i, endIndex);
-
-            processBatch(batch);
-        }
-
-        return activeKeys;
-    }
-
-    private void processBatch(List<Map<String, Object>> batch) {
-        batch.forEach(op -> {
-            try {
-                String key = (String) op.get("key");
-                Object value = op.get("value");
-
-                // Set value with expiration
-                redisTemplate.opsForValue().set(key, value);
-
-                log.debug("Saved key: {}", key);
-            } catch (Exception e) {
-                log.error("Error processing batch item: {}", e.getMessage());
+                log.error("[setCache] Error while caching condition. cacheKey={}", cacheKey, e);
             }
         });
     }
 
-    public void cleanupInactiveAlerts(Set<String> activeKeys) {
-        try {
-            // Get all keys matching the pattern
-            Set<String> allKeys = scanKeys(CacheUtils.buildCacheKey(
-                    "*",
-                    "*",
-                    "*",
-                    "*"
-            ));
+    /* ------------------------------------------------------------------ */
+    /* 2. removeCache – delete by INDEX-SET                               */
+    /* ------------------------------------------------------------------ */
+    public void removeCache(Alert alertEntity) {
+        if (alertEntity == null || alertEntity.getStationId() == null || alertEntity.getUid() == null) {
+            log.warn("[removeCache] Skip – alert or identifiers are null. alert={}", alertEntity);
+            return;
+        }
 
-            // Find keys to delete (keys in Redis but not in active list)
-            Set<String> keysToDelete = allKeys.stream()
-                    .filter(key -> !activeKeys.contains(key))
-                    .collect(Collectors.toSet());
+        String indexPattern = "idx:station:" + alertEntity.getStationId() + ":metric:*";
+        Set<String> indexKeys = scanKeys(indexPattern);
+        log.debug("[removeCache] Found {} indexKeys with pattern {}", indexKeys.size(), indexPattern);
+
+        indexKeys.forEach(indexKey -> {
+            Set<Object> members = redisTemplate.opsForSet().members(indexKey);
+            if (members == null) return;
+
+            List<String> keysToDelete = members.stream()
+                    .map(Object::toString)
+                    .filter(key -> key.contains(":alert:" + alertEntity.getUid() + ":"))
+                    .toList();
 
             if (!keysToDelete.isEmpty()) {
-                // Delete in batches of 100
-                List<String> keysList = new ArrayList<>(keysToDelete);
-                int batchSize = 100;
-
-                for (int i = 0; i < keysList.size(); i += batchSize) {
-                    int endIndex = Math.min(i + batchSize, keysList.size());
-                    List<String> batch = keysList.subList(i, endIndex);
-                    redisTemplate.delete(batch);
-                }
-
-                log.info("Cleaned up {} inactive alert keys", keysToDelete.size());
-            } else {
-                log.info("No inactive keys to clean up");
+                redisTemplate.delete(keysToDelete);
+                redisTemplate.opsForSet().remove(indexKey, keysToDelete.toArray());
+                log.debug("[removeCache] Removed {} cacheKeys from indexKey={}", keysToDelete.size(), indexKey);
             }
-        } catch (Exception e) {
-            log.error("Error during cleanup process: {}", e.getMessage());
-        }
+        });
     }
 
+    /* ------------------------------------------------------------------ */
+    /* 3. updateActiveAlerts – batch write with pipeline                  */
+    /* ------------------------------------------------------------------ */
+    public Set<String> updateActiveAlerts(List<Alert> alertList) {
+        Set<String> activeCacheKeys = new HashSet<>();
+        List<Map<String, Object>> batchPayload = new ArrayList<>();
+
+        alertList.forEach(alertEntity -> {
+            if (alertEntity.getStationId() == null || alertEntity.getUid() == null) return;
+            if (alertEntity.getConditions() == null) return;
+
+            alertEntity.getConditions().forEach(condition -> {
+                String cacheKey = CacheUtils.buildCacheKey(
+                        alertEntity.getStationId().toString(),
+                        alertEntity.getUid().toString(),
+                        condition.getMetricId().toString(),
+                        condition.getUid().toString());
+                try {
+                    batchPayload.add(Map.of(
+                            "cacheKey", cacheKey,
+                            "valueJson", objectMapper.writeValueAsString(getValueKey(alertEntity, condition)),
+                            "indexKey", CacheUtils.buildIndexKey(alertEntity.getStationId(), condition.getMetricId())
+                    ));
+                    activeCacheKeys.add(cacheKey);
+                } catch (Exception ex) {
+                    log.error("[updateActiveAlerts] Build batch error. cacheKey={}", cacheKey, ex);
+                }
+            });
+        });
+
+        int batchSize = 100;
+        for (int i = 0; i < batchPayload.size(); i += batchSize) {
+            processBatch(batchPayload.subList(i, Math.min(i + batchSize, batchPayload.size())));
+        }
+        log.info("[updateActiveAlerts] Synced {} cacheKeys", activeCacheKeys.size());
+        return activeCacheKeys;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Private: pipeline write                                            */
+    /* ------------------------------------------------------------------ */
+    private void processBatch(List<Map<String, Object>> operations) {
+        redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+            operations.forEach(op -> {
+                byte[] cacheKeyBytes  = redisTemplate.getStringSerializer().serialize((String) op.get("cacheKey"));
+                byte[] valueBytes     = redisTemplate.getStringSerializer().serialize((String) op.get("valueJson"));
+                byte[] indexKeyBytes  = redisTemplate.getStringSerializer().serialize((String) op.get("indexKey"));
+
+                connection.set(cacheKeyBytes, valueBytes);
+                connection.sAdd(indexKeyBytes, cacheKeyBytes);
+            });
+            return null; // required by RedisCallback
+        });
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Utility: scanKeys using SCAN (non-blocking)                        */
+    /* ------------------------------------------------------------------ */
     private Set<String> scanKeys(String pattern) {
         Set<String> keys = new HashSet<>();
-
-        try (Cursor<String> cursor = redisTemplate.scan(ScanOptions.scanOptions().match(pattern).build())) {
-            while (cursor.hasNext()) {
-                keys.add(cursor.next());
-            }
+        try (Cursor<byte[]> cursor = redisTemplate.getConnectionFactory()
+                .getConnection()
+                .scan(ScanOptions.scanOptions().match(pattern).count(1000).build())) {
+            while (cursor.hasNext()) keys.add(new String(cursor.next()));
         } catch (Exception e) {
-            log.error("Error scanning Redis keys: {}", e.getMessage());
+            log.error("[scanKeys] Error pattern={}", pattern, e);
         }
-
         return keys;
+    }
+
+    /* Cleanup inactive cache keys (optional call by scheduler) */
+    public void cleanupInactiveAlerts(Set<String> activeCacheKeys) {
+        Set<String> allCacheKeys = scanKeys(CacheUtils.buildCacheKey("*", "*", "*", "*"));
+        Set<String> staleKeys = allCacheKeys.stream()
+                .filter(key -> !activeCacheKeys.contains(key))
+                .collect(Collectors.toSet());
+        if (!staleKeys.isEmpty()) {
+            redisTemplate.delete(staleKeys);
+            log.info("[cleanupInactiveAlerts] Removed {} staleKeys", staleKeys.size());
+        }
     }
 }

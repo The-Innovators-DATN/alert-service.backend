@@ -59,4 +59,7 @@ public class CacheUtils {
         return valueMap;
     }
 
+    public static String buildIndexKey(Integer stationId, Integer metricId) {
+        return "idx:station:" + stationId + ":metric:" + metricId;
+    }
 }
