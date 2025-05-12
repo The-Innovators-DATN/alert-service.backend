@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -42,12 +43,13 @@ public class KafkaService {
             groupId = "${spring.kafka.consumer.group-id}"
 //            concurrency = "${kafka.listener.concurrency:4}"
     )
-    public void consumeSensorData(String messagePayload) {
+    public void consumeSensorData(String messagePayload, Acknowledgment acknowledgment) {
         try {
             SensorData sensorData = objectMapper.readValue(messagePayload, SensorData.class);
-            log.debug("[consumeSensorData] stationId={} metric={} value={}",
-                    sensorData.getStationId(), sensorData.getMetric(), sensorData.getValue());
+            log.debug("[consumeSensorData] stationId={} sensorId={} metric={} value={} unit={} datetime={}",
+                    sensorData.getStationId(), sensorData.getSensorId(), sensorData.getMetric(), sensorData.getValue(), sensorData.getUnit(), sensorData.getDatetime());
             evaluateSensorData(sensorData);
+            acknowledgment.acknowledge();
         } catch (Exception ex) {
             log.error("[consumeSensorData] Parse error. payload={}", messagePayload, ex);
         }
