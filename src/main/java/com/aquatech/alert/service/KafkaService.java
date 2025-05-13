@@ -24,6 +24,8 @@ import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -38,6 +40,7 @@ public class KafkaService {
     @Autowired private RedisTemplate<String, Object> redisTemplate;
     @Autowired private RedisTemplate<String, String> customStringRedisTemplate;
     @Autowired private RedissonClient redissonClient;
+    private final ExecutorService executorService = Executors.newFixedThreadPool(4);
 
     @KafkaListener(
             topics = "${kafka.alert-topic}",
@@ -76,49 +79,57 @@ public class KafkaService {
         }
 
         double currentValue = sensorData.getValue();
-        cacheKeys.forEach(cacheKey -> {
-            try {
-                String jsonValue = customStringRedisTemplate.opsForValue().get(cacheKey);
-                if (jsonValue == null) return;
+        for (String cacheKey : cacheKeys) {
+            executorService.submit(() -> processCacheKey(cacheKey, currentValue, sensorData));
+        }
 
-                Map<String, Object> conditionMap = objectMapper.readValue(jsonValue, new TypeReference<>() {});
-                String conditionUid = (String) conditionMap.get(RedisConstant.KEY_CONDITION_UID);
-
-                boolean isMet = evaluateCondition(
-                        (String) conditionMap.get(RedisConstant.KEY_OPERATOR),
-                        currentValue,
-                        toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD)),
-                        toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MIN)),
-                        toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MAX)));
-
-                RLock trackingLock = redissonClient.getLock("lock:tracking:" + conditionUid);
-                if (!trackingLock.tryLock(5, 2, TimeUnit.SECONDS)) {
-                    log.warn("[evaluateSensorData] Could not acquire lock for conditionUid={}", conditionUid);
-                    return;
-                }
-
-                try {
-                    String trackingKey = RedisConstant.TRACKING_PREFIX + conditionUid;
-                    boolean trackingExists = redisTemplate.hasKey(trackingKey);
-
-                    if (isMet && !trackingExists) {
-                        publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_ALERT);
-                        redisTemplate.opsForValue().set(trackingKey, "1",
-                                Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
-                        log.info("[evaluateSensorData] Trigger ALERT conditionUid={} value={}", conditionUid, currentValue);
-                    } else if (!isMet && trackingExists) {
-                        publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_RESOLVED);
-                        redisTemplate.delete(trackingKey);
-                        log.info("[evaluateSensorData] Trigger RESOLVE conditionUid={} value={}", conditionUid, currentValue);
-                    }
-                } finally {
-                    trackingLock.unlock();
-                }
-            } catch (Exception e) {
-                log.error("[evaluateSensorData] Error processing cacheKey={}", cacheKey, e);
-            }
-        });
+        log.info("[evaluateSensorData] Submitted {}/{} cacheKeys for async processing for indexKey={}",
+                cacheKeys.size(), cacheKeys.size(), indexKey);
     }
+
+    private void processCacheKey(String cacheKey, double currentValue, SensorData sensorData) {
+        try {
+            String jsonValue = customStringRedisTemplate.opsForValue().get(cacheKey);
+            if (jsonValue == null) return;
+
+            Map<String, Object> conditionMap = objectMapper.readValue(jsonValue, new TypeReference<>() {});
+            String conditionUid = (String) conditionMap.get(RedisConstant.KEY_CONDITION_UID);
+
+            boolean isMet = evaluateCondition(
+                    (String) conditionMap.get(RedisConstant.KEY_OPERATOR),
+                    currentValue,
+                    toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD)),
+                    toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MIN)),
+                    toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MAX)));
+
+            RLock trackingLock = redissonClient.getLock("lock:tracking:" + conditionUid);
+            if (!trackingLock.tryLock(1, 2, TimeUnit.SECONDS)) {
+                log.warn("[processCacheKey] Could not acquire lock for conditionUid={} within 1 second", conditionUid);
+                return;
+            }
+
+            try {
+                String trackingKey = RedisConstant.TRACKING_PREFIX + conditionUid;
+                boolean trackingExists = redisTemplate.hasKey(trackingKey);
+
+                if (isMet && !trackingExists) {
+                    publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_ALERT);
+                    redisTemplate.opsForValue().set(trackingKey, "1",
+                            Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
+                    log.info("[processCacheKey] Trigger ALERT conditionUid={} value={}", conditionUid, currentValue);
+                } else if (!isMet && trackingExists) {
+                    publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_RESOLVED);
+                    redisTemplate.delete(trackingKey);
+                    log.info("[processCacheKey] Trigger RESOLVE conditionUid={} value={}", conditionUid, currentValue);
+                }
+            } finally {
+                trackingLock.unlock();
+            }
+        } catch (Exception e) {
+            log.error("[processCacheKey] Error processing cacheKey={}", cacheKey, e);
+        }
+    }
+
     private void publishNotification(Map<String, Object> conditionMap, SensorData sensorData,
                                      Double currentValue, String messageType) {
         try {
