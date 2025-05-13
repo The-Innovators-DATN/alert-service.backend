@@ -15,7 +15,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.kafka.annotation.TopicPartition;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
@@ -37,6 +36,7 @@ public class KafkaService {
     @Autowired private KafkaTemplate<String, String> kafkaTemplate;
     @Autowired private ObjectMapper objectMapper;
     @Autowired private RedisTemplate<String, Object> redisTemplate;
+    @Autowired private RedisTemplate<String, String> customStringRedisTemplate;
     @Autowired private RedissonClient redissonClient;
 
     @KafkaListener(
@@ -58,19 +58,20 @@ public class KafkaService {
 
     private void evaluateSensorData(SensorData sensorData) {
         String indexKey = CacheUtils.buildIndexKey(sensorData.getStationId(), sensorData.getSensorId());
-        Set<Object> cacheKeys = redisTemplate.opsForSet().members(indexKey);
+        Set<String> cacheKeys = customStringRedisTemplate.opsForSet().members(indexKey);
         if (cacheKeys == null || cacheKeys.isEmpty()) {
             log.trace("[evaluateSensorData] No conditions for indexKey={}", indexKey);
             return;
         }
 
         double currentValue = sensorData.getValue();
-        cacheKeys.forEach(rawKey -> {
-            String cacheKey = rawKey.toString();
+        cacheKeys.forEach(cacheKey -> {
             try {
-                String jsonValue = (String) redisTemplate.opsForValue().get(cacheKey);
+                // Sử dụng customStringRedisTemplate để lấy dữ liệu dưới dạng chuỗi thô
+                String jsonValue = customStringRedisTemplate.opsForValue().get(cacheKey);
                 if (jsonValue == null) return;
 
+                // Parse chuỗi JSON thủ công bằng objectMapper
                 Map<String, Object> conditionMap = objectMapper.readValue(jsonValue, new TypeReference<>() {});
                 String conditionUid = (String) conditionMap.get(RedisConstant.KEY_CONDITION_UID);
 

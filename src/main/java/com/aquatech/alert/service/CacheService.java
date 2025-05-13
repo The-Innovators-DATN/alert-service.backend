@@ -25,11 +25,11 @@ public class CacheService {
     private RedisTemplate<String, Object> redisTemplate;
 
     @Autowired
+    private RedisTemplate<String, String> customStringRedisTemplate;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
-    /* ------------------------------------------------------------------ */
-    /* 1. setCache – write value + create INDEX-SET                       */
-    /* ------------------------------------------------------------------ */
     public void setCache(Alert alertEntity) {
         if (alertEntity == null || alertEntity.getStationId() == null || alertEntity.getUid() == null) {
             log.warn("[setCache] Skip – alert or identifiers are null. alert={}", alertEntity);
@@ -59,7 +59,7 @@ public class CacheService {
                 redisTemplate.opsForValue().set(cacheKey, payloadJson);
 
                 String indexKey = CacheUtils.buildIndexKey(alertEntity.getStationId(), condition.getMetricId());
-                redisTemplate.opsForSet().add(indexKey, cacheKey);
+                customStringRedisTemplate.opsForSet().add(indexKey, cacheKey); // Sử dụng stringRedisTemplate
 
                 log.debug("[setCache] Cached condition. cacheKey={} indexKey={}", cacheKey, indexKey);
             } catch (Exception e) {
@@ -68,9 +68,6 @@ public class CacheService {
         });
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 2. removeCache – delete by INDEX-SET                               */
-    /* ------------------------------------------------------------------ */
     public void removeCache(Alert alertEntity) {
         if (alertEntity == null || alertEntity.getStationId() == null || alertEntity.getUid() == null) {
             log.warn("[removeCache] Skip – alert or identifiers are null. alert={}", alertEntity);
@@ -82,7 +79,7 @@ public class CacheService {
         log.debug("[removeCache] Found {} indexKeys with pattern {}", indexKeys.size(), indexPattern);
 
         indexKeys.forEach(indexKey -> {
-            Set<Object> members = redisTemplate.opsForSet().members(indexKey);
+            Set<String> members = customStringRedisTemplate.opsForSet().members(indexKey);
             if (members == null) return;
 
             List<String> keysToDelete = members.stream()
@@ -92,15 +89,12 @@ public class CacheService {
 
             if (!keysToDelete.isEmpty()) {
                 redisTemplate.delete(keysToDelete);
-                redisTemplate.opsForSet().remove(indexKey, keysToDelete.toArray());
+                customStringRedisTemplate.opsForSet().remove(indexKey, keysToDelete.toArray());
                 log.debug("[removeCache] Removed {} cacheKeys from indexKey={}", keysToDelete.size(), indexKey);
             }
         });
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 3. updateActiveAlerts – batch write with pipeline                  */
-    /* ------------------------------------------------------------------ */
     public Set<String> updateActiveAlerts(List<Alert> alertList) {
         Set<String> activeCacheKeys = new HashSet<>();
         List<Map<String, Object>> batchPayload = new ArrayList<>();
@@ -141,26 +135,20 @@ public class CacheService {
         return activeCacheKeys;
     }
 
-    /* ------------------------------------------------------------------ */
-    /* Private: pipeline write                                            */
-    /* ------------------------------------------------------------------ */
     private void processBatch(List<Map<String, Object>> operations) {
         redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
             operations.forEach(op -> {
-                byte[] cacheKeyBytes  = redisTemplate.getStringSerializer().serialize((String) op.get("cacheKey"));
-                byte[] valueBytes     = redisTemplate.getStringSerializer().serialize((String) op.get("valueJson"));
-                byte[] indexKeyBytes  = redisTemplate.getStringSerializer().serialize((String) op.get("indexKey"));
+                byte[] cacheKeyBytes = redisTemplate.getStringSerializer().serialize((String) op.get("cacheKey"));
+                byte[] valueBytes = redisTemplate.getStringSerializer().serialize((String) op.get("valueJson"));
+                byte[] indexKeyBytes = redisTemplate.getStringSerializer().serialize((String) op.get("indexKey"));
 
                 connection.set(cacheKeyBytes, valueBytes);
                 connection.sAdd(indexKeyBytes, cacheKeyBytes);
             });
-            return null; // required by RedisCallback
+            return null;
         });
     }
 
-    /* ------------------------------------------------------------------ */
-    /* Utility: scanKeys using SCAN (non-blocking)                        */
-    /* ------------------------------------------------------------------ */
     private Set<String> scanKeys(String pattern) {
         Set<String> keys = new HashSet<>();
         try (Cursor<byte[]> cursor = redisTemplate.getConnectionFactory()
@@ -173,7 +161,6 @@ public class CacheService {
         return keys;
     }
 
-    /* Cleanup inactive cache keys (optional call by scheduler) */
     public void cleanupInactiveAlerts(Set<String> activeCacheKeys) {
         Set<String> allCacheKeys = scanKeys(CacheUtils.buildCacheKey("*", "*", "*", "*"));
         Set<String> staleKeys = allCacheKeys.stream()
