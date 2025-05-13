@@ -45,14 +45,25 @@ public class KafkaService {
             concurrency = "${kafka.listener.concurrency:3}"
     )
     public void consumeSensorData(String messagePayload, Acknowledgment acknowledgment) {
+        SensorData sensorData = null;
         try {
-            SensorData sensorData = objectMapper.readValue(messagePayload, SensorData.class);
+            sensorData = objectMapper.readValue(messagePayload, SensorData.class);
             log.debug("[consumeSensorData] stationId={} sensorId={} metric={} value={} unit={} datetime={}",
                     sensorData.getStationId(), sensorData.getSensorId(), sensorData.getMetric(), sensorData.getValue(), sensorData.getUnit(), sensorData.getDatetime());
+
             evaluateSensorData(sensorData);
-            acknowledgment.acknowledge();
         } catch (Exception ex) {
-            log.error("[consumeSensorData] Parse error. payload={}", messagePayload, ex);
+            log.error("[consumeSensorData] Parse or processing error. payload={}", messagePayload, ex);
+        } finally {
+            if (sensorData != null) {
+                try {
+                    acknowledgment.acknowledge();
+                } catch (Exception ex) {
+                    log.error("[consumeSensorData] Failed to commit offset. payload={}", messagePayload, ex);
+                }
+            } else {
+                log.warn("[consumeSensorData] Skipping offset commit due to parse failure. payload={}", messagePayload);
+            }
         }
     }
 
@@ -67,11 +78,9 @@ public class KafkaService {
         double currentValue = sensorData.getValue();
         cacheKeys.forEach(cacheKey -> {
             try {
-                // Sử dụng customStringRedisTemplate để lấy dữ liệu dưới dạng chuỗi thô
                 String jsonValue = customStringRedisTemplate.opsForValue().get(cacheKey);
                 if (jsonValue == null) return;
 
-                // Parse chuỗi JSON thủ công bằng objectMapper
                 Map<String, Object> conditionMap = objectMapper.readValue(jsonValue, new TypeReference<>() {});
                 String conditionUid = (String) conditionMap.get(RedisConstant.KEY_CONDITION_UID);
 
@@ -110,7 +119,6 @@ public class KafkaService {
             }
         });
     }
-
     private void publishNotification(Map<String, Object> conditionMap, SensorData sensorData,
                                      Double currentValue, String messageType) {
         try {
