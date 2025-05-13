@@ -68,8 +68,6 @@ public class AlertService {
 
         Alert alert = alertRepository.findById(UUID.fromString(alertId))
                 .orElseThrow(() -> new IllegalArgumentException("Alert not found"));
-
-        Integer silenced = alert.getSilenced();
         String status = alert.getStatus();
 
         alert.setName(alertDto.getName());

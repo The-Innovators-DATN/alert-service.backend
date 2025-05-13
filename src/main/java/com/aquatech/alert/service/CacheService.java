@@ -110,6 +110,11 @@ public class CacheService {
             if (alertEntity.getConditions() == null) return;
 
             alertEntity.getConditions().forEach(condition -> {
+                if (condition.getMetricId() == null) {
+                    log.warn("[updateActiveAlerts] Skip condition with null metricId. alertId={} conditionUid={}",
+                            alertEntity.getUid(), condition.getUid());
+                    return;
+                }
                 String cacheKey = CacheUtils.buildCacheKey(
                         alertEntity.getStationId().toString(),
                         alertEntity.getUid().toString(),

@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.annotation.TopicPartition;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
@@ -40,8 +41,8 @@ public class KafkaService {
 
     @KafkaListener(
             topics = "${kafka.alert-topic}",
-            groupId = "${spring.kafka.consumer.group-id}"
-//            concurrency = "${kafka.listener.concurrency:4}"
+            groupId = "${spring.kafka.consumer.group-id}",
+            concurrency = "${kafka.listener.concurrency:3}"
     )
     public void consumeSensorData(String messagePayload, Acknowledgment acknowledgment) {
         try {
