@@ -51,8 +51,8 @@ public class KafkaService {
         SensorData sensorData = null;
         try {
             sensorData = objectMapper.readValue(messagePayload, SensorData.class);
-            log.debug("[consumeSensorData] stationId={} sensorId={} metric={} value={} unit={} datetime={}",
-                    sensorData.getStationId(), sensorData.getSensorId(), sensorData.getMetric(), sensorData.getValue(), sensorData.getUnit(), sensorData.getDatetime());
+//            log.debug("[consumeSensorData] stationId={} sensorId={} metric={} value={} unit={} datetime={}",
+//                    sensorData.getStationId(), sensorData.getSensorId(), sensorData.getMetric(), sensorData.getValue(), sensorData.getUnit(), sensorData.getDatetime());
 
             evaluateSensorData(sensorData);
         } catch (Exception ex) {
