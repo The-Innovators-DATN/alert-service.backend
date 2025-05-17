@@ -16,7 +16,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -44,29 +43,17 @@ public class KafkaService {
 
     @KafkaListener(
             topics = "${kafka.alert-topic}",
-            groupId = "${spring.kafka.consumer.group-id}",
-            concurrency = "${kafka.listener.concurrency:3}"
+            groupId = "${spring.kafka.consumer.group-id}"
     )
-    public void consumeSensorData(String messagePayload, Acknowledgment acknowledgment) {
+    public void consumeSensorData(String messagePayload) {
         SensorData sensorData = null;
         try {
             sensorData = objectMapper.readValue(messagePayload, SensorData.class);
 //            log.debug("[consumeSensorData] stationId={} sensorId={} metric={} value={} unit={} datetime={}",
 //                    sensorData.getStationId(), sensorData.getSensorId(), sensorData.getMetric(), sensorData.getValue(), sensorData.getUnit(), sensorData.getDatetime());
-
             evaluateSensorData(sensorData);
         } catch (Exception ex) {
             log.error("[consumeSensorData] Parse or processing error. payload={}", messagePayload, ex);
-        } finally {
-            if (sensorData != null) {
-                try {
-                    acknowledgment.acknowledge();
-                } catch (Exception ex) {
-                    log.error("[consumeSensorData] Failed to commit offset. payload={}", messagePayload, ex);
-                }
-            } else {
-                log.warn("[consumeSensorData] Skipping offset commit due to parse failure. payload={}", messagePayload);
-            }
         }
     }
 
