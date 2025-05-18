@@ -69,17 +69,22 @@ public class KafkaService {
         for (String cacheKey : cacheKeys) {
             executorService.submit(() -> processCacheKey(cacheKey, currentValue, sensorData));
         }
-
-        log.info("[evaluateSensorData] Submitted {}/{} cacheKeys for async processing for indexKey={}",
-                cacheKeys.size(), cacheKeys.size(), indexKey);
+//
+//        log.info("[evaluateSensorData] Submitted {}/{} cacheKeys for async processing for indexKey={}",
+//                cacheKeys.size(), cacheKeys.size(), indexKey);
     }
 
     private void processCacheKey(String cacheKey, double currentValue, SensorData sensorData) {
         try {
             String jsonValue = customStringRedisTemplate.opsForValue().get(cacheKey);
-            if (jsonValue == null) return;
 
-            Map<String, Object> conditionMap = objectMapper.readValue(jsonValue, new TypeReference<>() {});
+            if (jsonValue == null) {
+                return;
+            }
+
+            Map<String, Object> conditionMap = objectMapper.readValue(
+                    jsonValue, new TypeReference<>() {}
+            );
             String conditionUid = (String) conditionMap.get(RedisConstant.KEY_CONDITION_UID);
 
             boolean isMet = evaluateCondition(
@@ -87,33 +92,45 @@ public class KafkaService {
                     currentValue,
                     toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD)),
                     toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MIN)),
-                    toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MAX)));
+                    toDouble(conditionMap.get(RedisConstant.KEY_THRESHOLD_MAX))
+            );
 
             RLock trackingLock = redissonClient.getLock("lock:tracking:" + conditionUid);
-            if (!trackingLock.tryLock(1, 2, TimeUnit.SECONDS)) {
-                log.warn("[processCacheKey] Could not acquire lock for conditionUid={} within 1 second", conditionUid);
-                return;
-            }
-
+            boolean locked = false;
             try {
+                locked = trackingLock.tryLock(1, 5, TimeUnit.MINUTES);
+                if (!locked) {
+                    log.warn("[processCacheKey] Could not acquire lock for conditionUid={} within 1s", conditionUid);
+                    return;
+                }
+
                 String trackingKey = RedisConstant.TRACKING_PREFIX + conditionUid;
                 boolean trackingExists = redisTemplate.hasKey(trackingKey);
 
                 if (isMet && !trackingExists) {
                     publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_ALERT);
-                    redisTemplate.opsForValue().set(trackingKey, "1",
-                            Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS));
-                    log.info("[processCacheKey] Trigger ALERT conditionUid={} value={}", conditionUid, currentValue);
+                    redisTemplate.opsForValue().set(
+                            trackingKey,
+                            "1",
+                            Duration.ofHours(RedisConstant.TRACKING_DURATION_HOURS)
+                    );
                 } else if (!isMet && trackingExists) {
                     publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_RESOLVED);
                     redisTemplate.delete(trackingKey);
-                    log.info("[processCacheKey] Trigger RESOLVE conditionUid={} value={}", conditionUid, currentValue);
                 }
+
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                log.error("[processCacheKey] Interrupted while waiting for lock conditionUid={}", conditionUid, ie);
+            } catch (Exception e) {
+                log.error("[processCacheKey] Error processing cacheKey={}", cacheKey, e);
             } finally {
-                trackingLock.unlock();
+                if (locked && trackingLock.isHeldByCurrentThread()) {
+                    trackingLock.unlock();
+                }
             }
         } catch (Exception e) {
-            log.error("[processCacheKey] Error processing cacheKey={}", cacheKey, e);
+                log.error("[processCacheKey] Error processing cacheKey={}", cacheKey, e);
         }
     }
 
@@ -141,8 +158,8 @@ public class KafkaService {
 
             String notificationJson = objectMapper.writeValueAsString(notification);
             kafkaTemplate.send(alertNotificationTopic, notificationJson);
-            log.debug("[publishNotification] Sent {} for alertId={} conditionUid={}",
-                    messageType, notification.getAlertId(), notification.getTriggeredMetricId());
+//            log.debug("[publishNotification] Sent {} for alertId={} conditionUid={}",
+//                    messageType, notification.getAlertId(), notification.getTriggeredMetricId());
         } catch (Exception e) {
             log.error("[publishNotification] Serialization/send error", e);
         }
