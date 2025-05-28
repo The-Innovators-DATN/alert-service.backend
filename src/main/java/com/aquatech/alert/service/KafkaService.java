@@ -49,8 +49,8 @@ public class KafkaService {
         SensorData sensorData = null;
         try {
             sensorData = objectMapper.readValue(messagePayload, SensorData.class);
-//            log.debug("[consumeSensorData] stationId={} sensorId={} metric={} value={} unit={} datetime={}",
-//                    sensorData.getStationId(), sensorData.getSensorId(), sensorData.getMetric(), sensorData.getValue(), sensorData.getUnit(), sensorData.getDatetime());
+        //    log.debug("[consumeSensorData] stationId={} sensorId={} metric={} value={} unit={} datetime={}",
+        //            sensorData.getStationId(), sensorData.getSensorId(), sensorData.getMetric(), sensorData.getValue(), sensorData.getUnit(), sensorData.getDatetime());
             evaluateSensorData(sensorData);
         } catch (Exception ex) {
             log.error("[consumeSensorData] Parse or processing error. payload={}", messagePayload, ex);
@@ -70,8 +70,8 @@ public class KafkaService {
             executorService.submit(() -> processCacheKey(cacheKey, currentValue, sensorData));
         }
 //
-//        log.info("[evaluateSensorData] Submitted {}/{} cacheKeys for async processing for indexKey={}",
-//                cacheKeys.size(), cacheKeys.size(), indexKey);
+    //    log.info("[evaluateSensorData] Submitted {}/{} cacheKeys for async processing for indexKey={}",
+    //            cacheKeys.size(), cacheKeys.size(), indexKey);
     }
 
     private void processCacheKey(String cacheKey, double currentValue, SensorData sensorData) {
@@ -108,6 +108,8 @@ public class KafkaService {
                 boolean trackingExists = redisTemplate.hasKey(trackingKey);
 
                 if (isMet && !trackingExists) {
+                    // log.info("[processCacheKey] Condition met for conditionUid={} cacheKey={} value={}",
+                    //         conditionUid, cacheKey, currentValue);
                     publishNotification(conditionMap, sensorData, currentValue, AlertConstant.TYPE_ALERT);
                     redisTemplate.opsForValue().set(
                             trackingKey,
@@ -158,8 +160,8 @@ public class KafkaService {
 
             String notificationJson = objectMapper.writeValueAsString(notification);
             kafkaTemplate.send(alertNotificationTopic, notificationJson);
-//            log.debug("[publishNotification] Sent {} for alertId={} conditionUid={}",
-//                    messageType, notification.getAlertId(), notification.getTriggeredMetricId());
+        //    log.debug("[publishNotification] Sent {} for alertId={} conditionUid={}",
+        //            messageType, notification.getAlertId(), notification.getTriggeredMetricId());
         } catch (Exception e) {
             log.error("[publishNotification] Serialization/send error", e);
         }
